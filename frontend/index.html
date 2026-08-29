@@ -1,0 +1,1547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Advantal Support</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #0d0f14;
+    --surface: #13161e;
+    --surface2: #1a1e29;
+    --surface3: #22273a;
+    --border: #2a2f45;
+    --accent: #4f6ef7;
+    --accent2: #6c8aff;
+    --green: #22c55e;
+    --red: #ef4444;
+    --yellow: #f59e0b;
+    --orange: #f97316;
+    --text: #e8eaf0;
+    --text2: #8b93b0;
+    --text3: #5a6285;
+    --mono: 'DM Mono', monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; overflow-x: hidden; }
+  
+  /* ── Scrollbar ── */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: var(--surface); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  /* ── Login ── */
+  .login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--bg); position: relative; overflow: hidden; }
+  .login-bg { position: absolute; inset: 0; background: radial-gradient(ellipse 800px 600px at 50% 0%, rgba(79,110,247,.12) 0%, transparent 70%); pointer-events: none; }
+  .login-card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 48px 40px; width: 420px; position: relative; }
+  .login-logo { display: flex; align-items: center; gap: 10px; margin-bottom: 32px; }
+  .login-logo-icon { width: 36px; height: 36px; background: var(--accent); border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 18px; }
+  .login-logo-text { font-size: 20px; font-weight: 700; letter-spacing: -.5px; }
+  .login-title { font-size: 26px; font-weight: 700; margin-bottom: 6px; }
+  .login-sub { color: var(--text2); font-size: 14px; margin-bottom: 32px; }
+  .field { margin-bottom: 18px; }
+  .field label { display: block; font-size: 13px; color: var(--text2); margin-bottom: 6px; font-weight: 500; }
+  .field input { width: 100%; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 11px 14px; color: var(--text); font-size: 14px; font-family: inherit; transition: border-color .2s; outline: none; }
+  .field input:focus { border-color: var(--accent); }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 10px 18px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; border: none; transition: all .15s; font-family: inherit; }
+  .btn-primary { background: var(--accent); color: #fff; width: 100%; }
+  .btn-primary:hover { background: var(--accent2); }
+  .btn-sm { padding: 6px 12px; font-size: 13px; }
+  .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text); }
+  .btn-outline:hover { background: var(--surface2); }
+  .btn-ghost { background: transparent; color: var(--text2); }
+  .btn-ghost:hover { color: var(--text); background: var(--surface2); }
+  .btn-danger { background: rgba(239,68,68,.1); color: var(--red); border: 1px solid rgba(239,68,68,.2); }
+  .btn-danger:hover { background: rgba(239,68,68,.2); }
+  .login-hints { margin-top: 24px; padding: 14px; background: var(--surface2); border-radius: 8px; border: 1px solid var(--border); }
+  .login-hints p { font-size: 12px; color: var(--text2); margin-bottom: 4px; }
+  .login-hints code { font-family: var(--mono); font-size: 11px; color: var(--accent2); background: var(--surface3); padding: 2px 5px; border-radius: 3px; }
+  .error-msg { background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.2); color: var(--red); padding: 10px 12px; border-radius: 8px; font-size: 13px; margin-bottom: 16px; }
+
+  /* ── Layout ── */
+  .app-layout { display: flex; min-height: 100vh; }
+  .sidebar { width: 240px; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; position: fixed; top: 0; bottom: 0; left: 0; z-index: 100; }
+  .sidebar-logo { padding: 20px 20px 16px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--border); }
+  .sidebar-logo-icon { width: 30px; height: 30px; background: var(--accent); border-radius: 7px; display: flex; align-items: center; justify-content: center; font-size: 15px; flex-shrink: 0; }
+  .sidebar-logo-text { font-size: 17px; font-weight: 700; letter-spacing: -.3px; }
+  .sidebar-nav { flex: 1; padding: 12px 10px; overflow-y: auto; }
+  .nav-section-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; color: var(--text3); padding: 8px 10px 4px; }
+  .nav-item { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px; font-size: 14px; font-weight: 500; color: var(--text2); cursor: pointer; transition: all .15s; margin-bottom: 2px; border: none; background: none; width: 100%; text-align: left; font-family: inherit; }
+  .nav-item:hover { background: var(--surface2); color: var(--text); }
+  .nav-item.active { background: rgba(79,110,247,.12); color: var(--accent2); }
+  .nav-item .nav-icon { font-size: 16px; width: 20px; text-align: center; }
+  .nav-badge { margin-left: auto; background: var(--accent); color: #fff; font-size: 11px; padding: 2px 6px; border-radius: 10px; font-weight: 600; }
+  .sidebar-user { padding: 12px 14px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 10px; }
+  .avatar { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; flex-shrink: 0; }
+  .avatar-admin { background: rgba(79,110,247,.2); color: var(--accent2); }
+  .avatar-freelancer { background: rgba(34,197,94,.2); color: var(--green); }
+  .user-info { flex: 1; min-width: 0; }
+  .user-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .user-role { font-size: 11px; color: var(--text3); text-transform: uppercase; letter-spacing: .5px; }
+  .main { margin-left: 240px; flex: 1; display: flex; flex-direction: column; min-height: 100vh; }
+  .topbar { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 24px; height: 58px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; position: sticky; top: 0; z-index: 50; }
+  .topbar-title { font-size: 17px; font-weight: 700; }
+  .topbar-actions { display: flex; align-items: center; gap: 10px; }
+  .page { padding: 24px; flex: 1; }
+
+  /* ── Stats Cards ── */
+  .stats-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; margin-bottom: 24px; }
+  .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px; transition: border-color .2s; }
+  .stat-card:hover { border-color: var(--accent); }
+  .stat-label { font-size: 12px; color: var(--text2); font-weight: 500; margin-bottom: 10px; text-transform: uppercase; letter-spacing: .5px; }
+  .stat-value { font-size: 30px; font-weight: 700; line-height: 1; font-family: var(--mono); }
+  .stat-value.accent { color: var(--accent2); }
+  .stat-value.green { color: var(--green); }
+  .stat-value.yellow { color: var(--yellow); }
+  .stat-value.red { color: var(--red); }
+  .stat-value.orange { color: var(--orange); }
+
+  /* ── Tickets Table ── */
+  .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+  .section-title { font-size: 16px; font-weight: 700; }
+  .filters { display: flex; gap: 8px; align-items: center; }
+  .filter-select { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 7px 12px; color: var(--text); font-size: 13px; font-family: inherit; cursor: pointer; outline: none; }
+  .search-input { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 7px 14px; color: var(--text); font-size: 13px; font-family: inherit; outline: none; width: 200px; }
+  .search-input:focus { border-color: var(--accent); }
+  .table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .table { width: 100%; border-collapse: collapse; }
+  .table th { padding: 11px 16px; text-align: left; font-size: 11px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: .8px; border-bottom: 1px solid var(--border); background: var(--surface2); white-space: nowrap; }
+  .table td { padding: 14px 16px; font-size: 14px; border-bottom: 1px solid rgba(42,47,69,.5); vertical-align: middle; }
+  .table tr:last-child td { border-bottom: none; }
+  .table tr:hover td { background: rgba(255,255,255,.02); }
+  .table tr { cursor: pointer; transition: background .1s; }
+  .tid { font-family: var(--mono); font-size: 12px; color: var(--accent2); font-weight: 500; }
+  .ticket-title-cell { max-width: 200px; }
+  .ticket-title { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ticket-sub { font-size: 12px; color: var(--text2); margin-top: 2px; }
+  
+  /* ── Badges ── */
+  .badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px; white-space: nowrap; }
+  .badge-open { background: rgba(79,110,247,.12); color: var(--accent2); }
+  .badge-in_progress { background: rgba(245,158,11,.12); color: var(--yellow); }
+  .badge-completed { background: rgba(34,197,94,.12); color: var(--green); }
+  .badge-critical { background: rgba(239,68,68,.12); color: var(--red); }
+  .badge-high { background: rgba(249,115,22,.12); color: var(--orange); }
+  .badge-medium { background: rgba(245,158,11,.12); color: var(--yellow); }
+  .badge-low { background: rgba(139,147,176,.12); color: var(--text2); }
+  .badge-type { background: var(--surface3); color: var(--text2); font-size: 10px; }
+  .badge-admin { background: rgba(79,110,247,.12); color: var(--accent2); }
+  .badge-freelancer { background: rgba(34,197,94,.12); color: var(--green); }
+
+  /* ── Progress ── */
+  .progress-wrap { display: flex; align-items: center; gap: 8px; }
+  .progress-bar { flex: 1; height: 5px; background: var(--surface3); border-radius: 99px; overflow: hidden; min-width: 60px; }
+  .progress-fill { height: 100%; background: var(--accent); border-radius: 99px; transition: width .3s; }
+  .progress-fill.green { background: var(--green); }
+  .progress-text { font-size: 12px; font-family: var(--mono); color: var(--text2); min-width: 32px; text-align: right; }
+
+  /* ── Ticket Detail ── */
+  .detail-layout { display: grid; grid-template-columns: 1fr 380px; gap: 20px; height: calc(100vh - 107px); }
+  .detail-left { overflow-y: auto; display: flex; flex-direction: column; gap: 16px; padding-right: 4px; }
+  .detail-right { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); overflow: hidden; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+  .card-title { font-size: 13px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 14px; }
+  .detail-title { font-size: 20px; font-weight: 700; margin-bottom: 8px; }
+  .detail-meta { display: flex; gap: 8px; flex-wrap: wrap; }
+  .detail-desc { font-size: 14px; color: var(--text2); line-height: 1.6; }
+  .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .info-item label { font-size: 11px; color: var(--text3); font-weight: 600; text-transform: uppercase; letter-spacing: .5px; display: block; margin-bottom: 4px; }
+  .info-item span { font-size: 14px; color: var(--text); }
+  .milestones-list { display: flex; flex-direction: column; gap: 8px; }
+  .milestone-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--surface2); border-radius: 8px; border: 1px solid var(--border); }
+  .milestone-check { width: 18px; height: 18px; border-radius: 5px; border: 2px solid var(--border); display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; transition: all .15s; }
+  .milestone-check.done { background: var(--green); border-color: var(--green); }
+  .milestone-text { font-size: 14px; flex: 1; }
+  .milestone-text.done { text-decoration: line-through; color: var(--text3); }
+
+  /* ── Chat ── */
+  .chat-header { padding: 14px 16px; border-bottom: 1px solid var(--border); font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .chat-messages { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+  .message { display: flex; flex-direction: column; max-width: 88%; }
+  .message.own { align-self: flex-end; }
+  .message.other { align-self: flex-start; }
+  .msg-meta { font-size: 11px; color: var(--text3); margin-bottom: 3px; display: flex; align-items: center; gap: 5px; }
+  .message.own .msg-meta { justify-content: flex-end; }
+  .msg-bubble { padding: 9px 12px; border-radius: 10px; font-size: 13px; line-height: 1.5; word-break: break-word; }
+  .message.own .msg-bubble { background: rgba(79,110,247,.2); border: 1px solid rgba(79,110,247,.25); color: var(--text); border-radius: 10px 10px 3px 10px; }
+  .message.other .msg-bubble { background: var(--surface2); border: 1px solid var(--border); border-radius: 10px 10px 10px 3px; }
+  .msg-bubble.update { background: rgba(245,158,11,.08); border: 1px solid rgba(245,158,11,.2); }
+  .msg-bubble.file { background: rgba(79,110,247,.08); border: 1px solid rgba(79,110,247,.2); }
+  .chat-input-area { padding: 12px; border-top: 1px solid var(--border); }
+  .chat-input-row { display: flex; gap: 8px; align-items: flex-end; }
+  .chat-textarea { flex: 1; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; color: var(--text); font-size: 13px; font-family: inherit; resize: none; outline: none; min-height: 38px; max-height: 100px; transition: border-color .2s; }
+  .chat-textarea:focus { border-color: var(--accent); }
+  .chat-tools { display: flex; gap: 6px; margin-top: 8px; }
+  .msg-type-select { background: var(--surface3); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; color: var(--text2); font-size: 12px; font-family: inherit; cursor: pointer; outline: none; }
+  .upload-label { display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; background: var(--surface3); border: 1px solid var(--border); border-radius: 6px; font-size: 12px; color: var(--text2); cursor: pointer; transition: all .15s; }
+  .upload-label:hover { background: var(--surface2); color: var(--text); }
+  input[type="file"] { display: none; }
+  .file-attach-preview { display: flex; align-items: center; gap: 6px; padding: 6px 10px; background: var(--surface3); border-radius: 6px; font-size: 12px; color: var(--text2); margin-top: 6px; }
+  .file-attach-preview button { background: none; border: none; color: var(--text3); cursor: pointer; padding: 0; font-size: 14px; }
+  .file-attach-preview button:hover { color: var(--red); }
+  .chat-send-btn { background: var(--accent); border: none; color: #fff; border-radius: 8px; width: 36px; height: 36px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; transition: background .15s; }
+  .chat-send-btn:hover { background: var(--accent2); }
+
+  /* ── Modal ── */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.6); backdrop-filter: blur(4px); z-index: 200; display: flex; align-items: center; justify-content: center; padding: 20px; }
+  .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; width: 580px; max-height: 90vh; overflow-y: auto; }
+  .modal-header { padding: 20px 24px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+  .modal-title { font-size: 17px; font-weight: 700; }
+  .modal-close { background: none; border: none; color: var(--text3); cursor: pointer; font-size: 18px; padding: 4px; border-radius: 6px; }
+  .modal-close:hover { color: var(--text); background: var(--surface2); }
+  .modal-body { padding: 20px 24px; }
+  .modal-footer { padding: 16px 24px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 10px; }
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .form-field { margin-bottom: 16px; }
+  .form-field label { display: block; font-size: 13px; color: var(--text2); margin-bottom: 6px; font-weight: 500; }
+  .form-field input, .form-field select, .form-field textarea { width: 100%; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; color: var(--text); font-size: 14px; font-family: inherit; outline: none; transition: border-color .2s; }
+  .form-field input:focus, .form-field select:focus, .form-field textarea:focus { border-color: var(--accent); }
+  .form-field textarea { resize: vertical; min-height: 80px; }
+  .milestone-add-row { display: flex; gap: 8px; margin-top: 8px; }
+  .milestone-tag { display: inline-flex; align-items: center; gap: 5px; background: var(--surface3); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font-size: 12px; margin: 3px; }
+  .milestone-tag button { background: none; border: none; color: var(--text3); cursor: pointer; font-size: 13px; line-height: 1; }
+
+  /* ── Signoffs Page ── */
+  .signoffs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
+  .signoff-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; transition: border-color .15s; }
+  .signoff-card:hover { border-color: var(--accent); }
+  .signoff-icon { width: 40px; height: 40px; background: rgba(79,110,247,.1); border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 20px; margin-bottom: 10px; }
+  .signoff-filename { font-size: 14px; font-weight: 600; word-break: break-all; margin-bottom: 4px; }
+  .signoff-meta { font-size: 12px; color: var(--text2); }
+  .signoff-ticket { font-size: 11px; color: var(--accent2); font-family: var(--mono); }
+
+  /* ── Empty State ── */
+  .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 60px 20px; color: var(--text3); }
+  .empty-state-icon { font-size: 40px; margin-bottom: 12px; }
+  .empty-state-text { font-size: 15px; font-weight: 500; }
+  .empty-state-sub { font-size: 13px; margin-top: 4px; }
+
+  /* ── Users Page ── */
+  .users-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+  .user-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px; display: flex; align-items: center; gap: 14px; }
+  .user-card-avatar { width: 44px; height: 44px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 700; flex-shrink: 0; }
+  .user-card-name { font-size: 15px; font-weight: 600; }
+  .user-card-email { font-size: 12px; color: var(--text2); margin-top: 2px; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+  .dot-green { background: var(--green); }
+  .dot-yellow { background: var(--yellow); }
+  .dot-red { background: var(--red); }
+  
+  .tag-online { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--green); }
+  
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spin { animation: spin 1s linear infinite; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  .fade-in { animation: fadeIn .2s ease; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script>
+const { useState, useEffect, useRef, useCallback, createContext, useContext } = React;
+
+// ─── API ──────────────────────────────────────────────────────────────────────
+const API = '/api';
+
+const api = {
+  async req(method, path, body, token, isForm) {
+    const headers = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    if (!isForm) headers['Content-Type'] = 'application/json';
+    const res = await fetch(API + path, {
+      method, headers,
+      body: isForm ? body : body ? JSON.stringify(body) : undefined
+    });
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      throw new Error(e.detail || 'Request failed');
+    }
+    return res.json();
+  },
+  get: (path, token) => api.req('GET', path, null, token),
+  post: (path, body, token) => api.req('POST', path, body, token),
+  patch: (path, body, token) => api.req('PATCH', path, body, token),
+  delete: (path, token) => api.req('DELETE', path, null, token),
+  postForm: (path, form, token) => api.req('POST', path, form, token, true),
+};
+
+// ─── Auth Context ─────────────────────────────────────────────────────────────
+const AuthCtx = createContext(null);
+const useAuth = () => useContext(AuthCtx);
+
+function AuthProvider({ children }) {
+  const [user, setUser] = useState(null);
+  const [token, setToken] = useState(() => localStorage.getItem('token'));
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (token) {
+      api.get('/auth/me', token)
+        .then(u => { setUser(u); setLoading(false); })
+        .catch(() => { localStorage.removeItem('token'); setToken(null); setLoading(false); });
+    } else setLoading(false);
+  }, []);
+
+  const login = async (email, password) => {
+    const data = await api.post('/auth/login', { email, password });
+    localStorage.setItem('token', data.access_token);
+    setToken(data.access_token);
+    setUser(data.user);
+    return data.user;
+  };
+
+  const logout = () => {
+    localStorage.removeItem('token');
+    setToken(null);
+    setUser(null);
+  };
+
+  if (loading) return React.createElement('div', { style: { display:'flex',alignItems:'center',justifyContent:'center',minHeight:'100vh',color:'#8b93b0' } }, '⚡ Loading...');
+
+  return React.createElement(AuthCtx.Provider, { value: { user, token, login, logout } }, children);
+}
+
+// ─── Login Page ───────────────────────────────────────────────────────────────
+function LoginPage() {
+  const { login } = useAuth();
+  const [email, setEmail] = useState('admin@portal.com');
+  const [password, setPassword] = useState('admin123');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async () => {
+    setError(''); setLoading(true);
+    try { await login(email, password); }
+    catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  };
+
+  return React.createElement('div', { className: 'login-wrap' },
+    React.createElement('div', { className: 'login-bg' }),
+    React.createElement('div', { className: 'login-card fade-in' },
+      React.createElement('div', { className: 'login-logo' },
+        React.createElement('div', { className: 'login-logo-icon' }, '⚡'),
+        React.createElement('span', { className: 'login-logo-text' }, 'Advantal Support')
+      ),
+      React.createElement('h1', { className: 'login-title' }, 'Welcome back'),
+      React.createElement('p', { className: 'login-sub' }, 'Sign in to manage field operations'),
+      error && React.createElement('div', { className: 'error-msg' }, error),
+      React.createElement('div', { className: 'field' },
+        React.createElement('label', null, 'Email address'),
+        React.createElement('input', { type:'email', value:email, onChange:e=>setEmail(e.target.value), placeholder:'your@email.com' })
+      ),
+      React.createElement('div', { className: 'field' },
+        React.createElement('label', null, 'Password'),
+        React.createElement('input', { type:'password', value:password, onChange:e=>setPassword(e.target.value), onKeyDown:e=>e.key==='Enter'&&handleSubmit() })
+      ),
+      React.createElement('button', { className:'btn btn-primary', onClick:handleSubmit, disabled:loading },
+        loading ? '⏳ Signing in...' : '→ Sign In'
+      ),
+      // React.createElement('div', { className: 'login-hints' },
+      //   React.createElement('p', { style:{fontWeight:600,marginBottom:8,color:'#8b93b0'} }, '🔑 Demo Credentials'),
+      //   React.createElement('p', null, 'Admin: ', React.createElement('code', null, 'admin@portal.com'), ' / ', React.createElement('code', null, 'admin123')),
+      //   React.createElement('p', { style:{marginTop:6} }, 'Freelancer: ', React.createElement('code', null, 'john@freelancer.com'), ' / ', React.createElement('code', null, 'free123'))
+      // )
+    )
+  );
+}
+
+// ─── Sidebar ──────────────────────────────────────────────────────────────────
+function Sidebar({ page, setPage, unread }) {
+  const { user, logout } = useAuth();
+  const perms = user?.permissions || [];
+  const can = (p) => perms.includes(p);
+
+  // Build nav dynamically from permissions
+  const navItems = [
+    { id: 'dashboard', icon: '◫', label: 'Dashboard' },
+    { id: 'tickets',   icon: '🎫', label: 'Tickets', badge: unread },
+    ...(can('signoffs.view_all') ? [{ id: 'signoffs', icon: '📋', label: 'All Signoffs' }]
+                                 : can('signoffs.upload') ? [{ id: 'signoffs', icon: '📋', label: 'My Signoffs' }] : []),
+    ...(can('users.view')    ? [{ id: 'users',  icon: '👥', label: 'Users' }]   : []),
+    ...(can('roles.view')    ? [{ id: 'roles',  icon: '🛡️', label: 'Roles & Permissions' }] : []),
+  ];
+
+  return React.createElement('div', { className: 'sidebar' },
+    React.createElement('div', { className: 'sidebar-logo' },
+      React.createElement('div', { className: 'sidebar-logo-icon' }, '⚡'),
+      React.createElement('span', { className: 'sidebar-logo-text' }, 'Advantal Support')
+    ),
+    React.createElement('nav', { className: 'sidebar-nav' },
+      React.createElement('div', { className: 'nav-section-label' }, 'Navigation'),
+      navItems.map(item =>
+        React.createElement('button', {
+          key: item.id,
+          className: `nav-item ${page === item.id ? 'active' : ''}`,
+          onClick: () => setPage(item.id)
+        },
+          React.createElement('span', { className: 'nav-icon' }, item.icon),
+          item.label,
+          item.badge ? React.createElement('span', { className: 'nav-badge' }, item.badge) : null
+        )
+      )
+    ),
+    React.createElement('div', { className: 'sidebar-user' },
+      React.createElement('div', { style:{
+        width:'32px',height:'32px',borderRadius:'8px',display:'flex',alignItems:'center',
+        justifyContent:'center',fontSize:'13px',fontWeight:'700',flexShrink:0,
+        background:(user?.role_color||'#4f6ef7')+'22', color:user?.role_color||'#4f6ef7'
+      }}, user?.avatar || user?.name?.[0]),
+      React.createElement('div', { className: 'user-info' },
+        React.createElement('div', { className: 'user-name' }, user?.name),
+        React.createElement('div', { className: 'user-role' }, user?.role_name || '')
+      ),
+      React.createElement('button', { className: 'btn btn-ghost btn-sm', onClick: logout, title: 'Logout' }, '→')
+    )
+  );
+}
+
+// ─── Dashboard Page ───────────────────────────────────────────────────────────
+function DashboardPage({ setPage, setSelectedTicket }) {
+  const { token } = useAuth();
+  const [stats, setStats] = useState(null);
+  const [tickets, setTickets] = useState([]);
+
+  useEffect(() => {
+    api.get('/dashboard/stats', token).then(setStats);
+    api.get('/tickets', token).then(setTickets);
+  }, []);
+
+  const recent = tickets.slice(0, 5);
+
+  return React.createElement('div', null,
+    React.createElement('div', { className: 'stats-grid' },
+      [
+        { label: 'Total Tickets', val: stats?.total ?? '–', cls: 'accent' },
+        { label: 'Open', val: stats?.open ?? '–', cls: '' },
+        { label: 'In Progress', val: stats?.in_progress ?? '–', cls: 'yellow' },
+        { label: 'Completed', val: stats?.completed ?? '–', cls: 'green' },
+        { label: 'Critical', val: stats?.critical ?? '–', cls: 'red' },
+      ].map(s =>
+        React.createElement('div', { key: s.label, className: 'stat-card' },
+          React.createElement('div', { className: 'stat-label' }, s.label),
+          React.createElement('div', { className: `stat-value ${s.cls}` }, s.val)
+        )
+      )
+    ),
+    React.createElement('div', { className: 'section-header' },
+      React.createElement('span', { className: 'section-title' }, '📋 Recent Tickets'),
+      React.createElement('button', { className: 'btn btn-outline btn-sm', onClick: () => setPage('tickets') }, 'View All →')
+    ),
+    React.createElement('div', { className: 'table-wrap' },
+      React.createElement('table', { className: 'table' },
+        React.createElement('thead', null,
+          React.createElement('tr', null,
+            ['ID','Title','Customer','Status','Priority','Progress'].map(h =>
+              React.createElement('th', { key: h }, h)
+            )
+          )
+        ),
+        React.createElement('tbody', null,
+          recent.length === 0
+            ? React.createElement('tr', null, React.createElement('td', { colSpan: 6, style:{textAlign:'center',padding:'40px',color:'var(--text3)'} }, 'No tickets yet'))
+            : recent.map(t => React.createElement(TicketRow, {
+                key: t.id, ticket: t,
+                onClick: () => { setSelectedTicket(t.id); setPage('ticket-detail'); }
+              }))
+        )
+      )
+    )
+  );
+}
+
+// ─── Ticket Row ───────────────────────────────────────────────────────────────
+function TicketRow({ ticket: t, onClick }) {
+  return React.createElement('tr', { onClick },
+    React.createElement('td', null, React.createElement('span', { className: 'tid' }, t.id)),
+    React.createElement('td', null,
+      React.createElement('div', { className: 'ticket-title-cell' },
+        React.createElement('div', { className: 'ticket-title' }, t.title),
+        React.createElement('div', { className: 'ticket-sub' }, React.createElement('span', { className: 'badge badge-type' }, t.type))
+      )
+    ),
+    React.createElement('td', null, React.createElement('span', { style:{fontSize:13,color:'var(--text2)'} }, t.customer)),
+    React.createElement('td', null, React.createElement('span', { className: `badge badge-${t.status}` }, t.status.replace('_',' '))),
+    React.createElement('td', null, React.createElement('span', { className: `badge badge-${t.priority}` }, t.priority)),
+    React.createElement('td', null,
+      React.createElement('div', { className: 'progress-wrap' },
+        React.createElement('div', { className: 'progress-bar' },
+          React.createElement('div', { className: `progress-fill ${t.progress===100?'green':''}`, style:{width:`${t.progress||0}%`} })
+        ),
+        React.createElement('span', { className: 'progress-text' }, `${t.progress||0}%`)
+      )
+    )
+  );
+}
+
+// ─── Tickets Page ─────────────────────────────────────────────────────────────
+function TicketsPage({ setPage, setSelectedTicket }) {
+  const { user, token } = useAuth();
+  const [tickets, setTickets] = useState([]);
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [showModal, setShowModal] = useState(false);
+  const isAdmin = (user?.permissions||[]).includes('tickets.create'); // permission-based
+
+  const load = () => api.get('/tickets', token).then(setTickets);
+  useEffect(() => { load(); }, []);
+
+  const filtered = tickets.filter(t => {
+    const q = search.toLowerCase();
+    return (!q || t.title.toLowerCase().includes(q) || t.id.toLowerCase().includes(q) || t.customer?.toLowerCase().includes(q))
+      && (!statusFilter || t.status === statusFilter);
+  });
+
+  return React.createElement('div', null,
+    React.createElement('div', { className: 'section-header' },
+      React.createElement('span', { className: 'section-title' }, `🎫 ${isAdmin ? 'All Tickets' : 'My Tickets'} (${filtered.length})`),
+      React.createElement('div', { className: 'filters' },
+        React.createElement('input', { className:'search-input', placeholder:'Search tickets...', value:search, onChange:e=>setSearch(e.target.value) }),
+        React.createElement('select', { className:'filter-select', value:statusFilter, onChange:e=>setStatusFilter(e.target.value) },
+          React.createElement('option', { value:'' }, 'All Status'),
+          ['open','in_progress','completed'].map(s => React.createElement('option', { key:s, value:s }, s.replace('_',' ')))
+        ),
+        isAdmin && React.createElement('button', { className:'btn btn-primary btn-sm', onClick:()=>setShowModal(true) }, '+ New Ticket')
+      )
+    ),
+    React.createElement('div', { className: 'table-wrap' },
+      React.createElement('table', { className: 'table' },
+        React.createElement('thead', null,
+          React.createElement('tr', null,
+            ['ID','Title','Customer','Assigned To','Status','Priority','Progress','Due Date'].map(h => React.createElement('th', { key:h }, h))
+          )
+        ),
+        React.createElement('tbody', null,
+          filtered.length === 0
+            ? React.createElement('tr', null, React.createElement('td', { colSpan: 8 }, React.createElement('div', { className:'empty-state' }, React.createElement('div', { className:'empty-state-icon' }, '📭'), React.createElement('div', { className:'empty-state-text' }, 'No tickets found'))))
+            : filtered.map(t => React.createElement('tr', {
+                key: t.id,
+                onClick: () => { setSelectedTicket(t.id); setPage('ticket-detail'); }
+              },
+              React.createElement('td', null, React.createElement('span', { className:'tid' }, t.id)),
+              React.createElement('td', null,
+                React.createElement('div', { className:'ticket-title-cell' },
+                  React.createElement('div', { className:'ticket-title' }, t.title),
+                  React.createElement('div', { className:'ticket-sub' }, React.createElement('span', { className:'badge badge-type' }, t.type))
+                )
+              ),
+              React.createElement('td', null, React.createElement('span', { style:{fontSize:13,color:'var(--text2)'} }, t.customer)),
+              React.createElement('td', null, React.createElement('span', { style:{fontSize:13} }, t.assigned_name || t.assigned_to)),
+              React.createElement('td', null, React.createElement('span', { className:`badge badge-${t.status}` }, t.status.replace('_',' '))),
+              React.createElement('td', null, React.createElement('span', { className:`badge badge-${t.priority}` }, t.priority)),
+              React.createElement('td', null,
+                React.createElement('div', { className:'progress-wrap' },
+                  React.createElement('div', { className:'progress-bar' },
+                    React.createElement('div', { className:`progress-fill ${t.progress===100?'green':''}`, style:{width:`${t.progress||0}%`} })
+                  ),
+                  React.createElement('span', { className:'progress-text' }, `${t.progress||0}%`)
+                )
+              ),
+              React.createElement('td', null, React.createElement('span', { style:{fontSize:12,color:'var(--text2)',fontFamily:'var(--mono)'} }, t.due_date))
+            ))
+        )
+      )
+    ),
+    showModal && React.createElement(CreateTicketModal, { onClose:()=>setShowModal(false), onCreated:()=>{ load(); setShowModal(false); } })
+  );
+}
+
+// ─── Create Ticket Modal ──────────────────────────────────────────────────────
+function CreateTicketModal({ onClose, onCreated }) {
+  const { token } = useAuth();
+  const [freelancers, setFreelancers] = useState([]);
+  const [form, setForm] = useState({ title:'', description:'', customer:'', assigned_to:'', priority:'medium', type:'INSTALLATION', budget:'', due_date:'', milestones:[] });
+  const [msInput, setMsInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => { api.get('/users/assignable', token).then(setFreelancers); }, []);
+
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  const addMilestone = () => {
+    if (!msInput.trim()) return;
+    set('milestones', [...form.milestones, { id: `m${Date.now()}`, title: msInput.trim(), done: false }]);
+    setMsInput('');
+  };
+
+  const submit = async () => {
+    setError(''); setLoading(true);
+    try {
+      await api.post('/tickets', { ...form, budget: parseFloat(form.budget)||0 }, token);
+      onCreated();
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  };
+
+  return React.createElement('div', { className:'modal-overlay', onClick:e=>e.target===e.currentTarget&&onClose() },
+    React.createElement('div', { className:'modal fade-in' },
+      React.createElement('div', { className:'modal-header' },
+        React.createElement('span', { className:'modal-title' }, '+ Create New Ticket'),
+        React.createElement('button', { className:'modal-close', onClick:onClose }, '✕')
+      ),
+      React.createElement('div', { className:'modal-body' },
+        error && React.createElement('div', { className:'error-msg' }, error),
+        React.createElement('div', { className:'form-field' },
+          React.createElement('label', null, 'Ticket Title *'),
+          React.createElement('input', { value:form.title, onChange:e=>set('title',e.target.value), placeholder:'e.g. Router Installation - Site A' })
+        ),
+        React.createElement('div', { className:'form-field' },
+          React.createElement('label', null, 'Description'),
+          React.createElement('textarea', { value:form.description, onChange:e=>set('description',e.target.value), placeholder:'Describe the task in detail...' })
+        ),
+        React.createElement('div', { className:'form-row' },
+          React.createElement('div', { className:'form-field' },
+            React.createElement('label', null, 'Customer *'),
+            React.createElement('input', { value:form.customer, onChange:e=>set('customer',e.target.value), placeholder:'Customer name' })
+          ),
+          React.createElement('div', { className:'form-field' },
+            React.createElement('label', null, 'Assign Freelancer *'),
+            React.createElement('select', { value:form.assigned_to, onChange:e=>set('assigned_to',e.target.value) },
+              React.createElement('option', { value:'' }, 'Select freelancer...'),
+              freelancers.map(f => React.createElement('option', { key:f.id, value:f.id }, f.name))
+            )
+          )
+        ),
+        React.createElement('div', { className:'form-row' },
+          React.createElement('div', { className:'form-field' },
+            React.createElement('label', null, 'Type'),
+            React.createElement('select', { value:form.type, onChange:e=>set('type',e.target.value) },
+              ['INSTALLATION','SURVEY','MIGRATION','MAINTENANCE','FIELD_SUPPORT'].map(t => React.createElement('option', { key:t, value:t }, t))
+            )
+          ),
+          React.createElement('div', { className:'form-field' },
+            React.createElement('label', null, 'Priority'),
+            React.createElement('select', { value:form.priority, onChange:e=>set('priority',e.target.value) },
+              ['low','medium','high','critical'].map(p => React.createElement('option', { key:p, value:p }, p))
+            )
+          )
+        ),
+        React.createElement('div', { className:'form-row' },
+          React.createElement('div', { className:'form-field' },
+            React.createElement('label', null, 'Budget (₹)'),
+            React.createElement('input', { type:'number', value:form.budget, onChange:e=>set('budget',e.target.value), placeholder:'0' })
+          ),
+          React.createElement('div', { className:'form-field' },
+            React.createElement('label', null, 'Due Date'),
+            React.createElement('input', { type:'date', value:form.due_date, onChange:e=>set('due_date',e.target.value) })
+          )
+        ),
+        React.createElement('div', { className:'form-field' },
+          React.createElement('label', null, 'Milestones'),
+          React.createElement('div', null,
+            form.milestones.map((m,i) =>
+              React.createElement('span', { key:m.id, className:'milestone-tag' },
+                m.title,
+                React.createElement('button', { onClick:()=>set('milestones', form.milestones.filter((_,j)=>j!==i)) }, '×')
+              )
+            )
+          ),
+          React.createElement('div', { className:'milestone-add-row' },
+            React.createElement('input', { value:msInput, onChange:e=>setMsInput(e.target.value), placeholder:'Add milestone...', onKeyDown:e=>e.key==='Enter'&&addMilestone(), style:{flex:1,background:'var(--surface2)',border:'1px solid var(--border)',borderRadius:'8px',padding:'8px 12px',color:'var(--text)',fontFamily:'inherit',fontSize:'13px',outline:'none'} }),
+            React.createElement('button', { className:'btn btn-outline btn-sm', onClick:addMilestone }, '+ Add')
+          )
+        )
+      ),
+      React.createElement('div', { className:'modal-footer' },
+        React.createElement('button', { className:'btn btn-outline', onClick:onClose }, 'Cancel'),
+        React.createElement('button', { className:'btn btn-primary', onClick:submit, disabled:loading }, loading ? '⏳ Creating...' : '✓ Create Ticket')
+      )
+    )
+  );
+}
+
+// ─── Ticket Detail Page ───────────────────────────────────────────────────────
+function TicketDetailPage({ ticketId, setPage }) {
+  const { user, token } = useAuth();
+  const [ticket, setTicket] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [msgText, setMsgText] = useState('');
+  const [msgType, setMsgType] = useState('text');
+  const [file, setFile] = useState(null);
+  const [sending, setSending] = useState(false);
+  const messagesEndRef = useRef(null);
+  const isAdmin = (user?.permissions||[]).includes('tickets.create'); // permission-based
+
+  const loadTicket = () => api.get(`/tickets/${ticketId}`, token).then(setTicket);
+  const loadMessages = () => api.get(`/tickets/${ticketId}/messages`, token).then(setMessages);
+
+  useEffect(() => {
+    loadTicket();
+    loadMessages();
+  }, [ticketId]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  const sendMessage = async () => {
+    if (!msgText.trim() && !file) return;
+    setSending(true);
+    try {
+      if (file) {
+        const fd = new FormData();
+        fd.append('file', file);
+        fd.append('description', msgText);
+        await api.postForm(`/tickets/${ticketId}/signoff`, fd, token);
+        setFile(null);
+      }
+      if (msgText.trim()) {
+        await api.post(`/tickets/${ticketId}/messages`, { content: msgText, type: msgType }, token);
+      }
+      setMsgText('');
+      setMsgType('text');
+      loadMessages();
+      loadTicket();
+    } catch (e) { alert(e.message); }
+    finally { setSending(false); }
+  };
+
+  const toggleMilestone = async (mid, done) => {
+    await api.patch(`/tickets/${ticketId}`, { milestone_id: mid, milestone_done: done }, token);
+    loadTicket();
+  };
+
+  const updateProgress = async (progress) => {
+    await api.patch(`/tickets/${ticketId}`, { progress: parseInt(progress) }, token);
+    loadTicket();
+  };
+
+  const updateStatus = async (status) => {
+    await api.patch(`/tickets/${ticketId}`, { status }, token);
+    loadTicket();
+  };
+
+  if (!ticket) return React.createElement('div', { style:{padding:'40px',color:'var(--text3)'} }, '⏳ Loading ticket...');
+
+  const doneMs = ticket.milestones?.filter(m=>m.done).length || 0;
+  const totalMs = ticket.milestones?.length || 0;
+
+  return React.createElement('div', null,
+    React.createElement('div', { style:{display:'flex',alignItems:'center',gap:'12px',marginBottom:'16px'} },
+      React.createElement('button', { className:'btn btn-ghost btn-sm', onClick:()=>setPage('tickets') }, '← Back'),
+      React.createElement('span', { className:'tid', style:{fontSize:'14px'} }, ticket.id),
+      React.createElement('span', { className:`badge badge-${ticket.status}` }, ticket.status.replace('_',' ')),
+      React.createElement('span', { className:`badge badge-${ticket.priority}` }, ticket.priority),
+      React.createElement('span', { className:'badge badge-type' }, ticket.type)
+    ),
+    React.createElement('div', { className:'detail-layout' },
+      // Left: Ticket Info
+      React.createElement('div', { className:'detail-left' },
+        React.createElement('div', { className:'card' },
+          React.createElement('div', { className:'detail-title' }, ticket.title),
+          React.createElement('p', { className:'detail-desc', style:{marginTop:'8px'} }, ticket.description),
+          React.createElement('div', { style:{marginTop:'16px'} },
+            React.createElement('div', { className:'progress-wrap', style:{marginBottom:'6px'} },
+              React.createElement('div', { className:'progress-bar', style:{height:'8px'} },
+                React.createElement('div', { className:`progress-fill ${ticket.progress===100?'green':''}`, style:{width:`${ticket.progress||0}%`} })
+              ),
+              React.createElement('span', { style:{fontSize:'14px',fontFamily:'var(--mono)',fontWeight:'600'} }, `${ticket.progress||0}%`)
+            ),
+            !isAdmin && React.createElement('input', {
+              type:'range', min:0, max:100, step:5, value:ticket.progress||0,
+              onChange: e=>updateProgress(e.target.value),
+              style:{width:'100%',marginTop:'4px',accentColor:'var(--accent)'}
+            })
+          )
+        ),
+        React.createElement('div', { className:'card' },
+          React.createElement('div', { className:'card-title' }, 'Details'),
+          React.createElement('div', { className:'info-grid' },
+            [
+              ['Customer', ticket.customer],
+              ['Budget', ticket.budget ? `₹${ticket.budget.toLocaleString()}` : '₹0'],
+              ['Due Date', ticket.due_date || 'Not set'],
+              ['Created', new Date(ticket.created_at).toLocaleDateString()],
+            ].map(([l,v]) =>
+              React.createElement('div', { key:l, className:'info-item' },
+                React.createElement('label', null, l),
+                React.createElement('span', null, v)
+              )
+            )
+          )
+        ),
+        ticket.milestones?.length > 0 && React.createElement('div', { className:'card' },
+          React.createElement('div', { style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'14px'} },
+            React.createElement('div', { className:'card-title', style:{margin:0} }, 'Milestones'),
+            React.createElement('span', { style:{fontSize:'13px',color:'var(--text2)',fontFamily:'var(--mono)'} }, `${doneMs}/${totalMs}`)
+          ),
+          React.createElement('div', { className:'milestones-list' },
+            ticket.milestones.map(m =>
+              React.createElement('div', { key:m.id, className:'milestone-item' },
+                React.createElement('div', {
+                  className:`milestone-check ${m.done?'done':''}`,
+                  onClick: () => (!isAdmin) && toggleMilestone(m.id, !m.done)
+                }, m.done ? '✓' : ''),
+                React.createElement('span', { className:`milestone-text ${m.done?'done':''}` }, m.title)
+              )
+            )
+          )
+        ),
+        isAdmin && React.createElement('div', { className:'card' },
+          React.createElement('div', { className:'card-title' }, 'Admin Controls'),
+          React.createElement('div', { style:{display:'flex',gap:'8px',flexWrap:'wrap'} },
+            ['open','in_progress','completed'].map(s =>
+              React.createElement('button', {
+                key:s, className:`btn btn-sm ${ticket.status===s?'btn-primary':'btn-outline'}`,
+                onClick:()=>updateStatus(s)
+              }, s.replace('_',' '))
+            )
+          )
+        )
+      ),
+      // Right: Chat
+      React.createElement('div', { className:'detail-right' },
+        React.createElement('div', { className:'chat-header' },
+          '💬 Chat & Updates',
+          React.createElement('span', { style:{marginLeft:'auto',fontSize:'12px',color:'var(--text3)'} }, `${messages.length} messages`)
+        ),
+        React.createElement('div', { className:'chat-messages' },
+          messages.length === 0
+            ? React.createElement('div', { className:'empty-state' },
+                React.createElement('div', { className:'empty-state-icon' }, '💬'),
+                React.createElement('div', { className:'empty-state-text' }, 'No messages yet'),
+                React.createElement('div', { className:'empty-state-sub' }, 'Start the conversation')
+              )
+            : messages.map(m =>
+                React.createElement('div', { key:m.id, className:`message ${m.user_id===user.id?'own':'other'}` },
+                  React.createElement('div', { className:'msg-meta' },
+                    React.createElement('span', { className:`badge badge-${m.role}`, style:{padding:'1px 6px',fontSize:'10px'} }, m.role),
+                    React.createElement('span', null, m.user_name),
+                    React.createElement('span', null, '·'),
+                    React.createElement('span', null, new Date(m.timestamp).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}))
+                  ),
+                  React.createElement('div', { className:`msg-bubble ${m.type!=='text'?m.type:''}` },
+                    m.content,
+                    m.attachments?.map(a =>
+                      React.createElement('div', { key:a.id, style:{marginTop:'6px'} },
+                        React.createElement('a', { href:a.path, target:'_blank', style:{color:'var(--accent2)',fontSize:'12px',display:'flex',alignItems:'center',gap:'4px'} },
+                          '📎 ', a.filename
+                        )
+                      )
+                    )
+                  )
+                )
+              ),
+          React.createElement('div', { ref: messagesEndRef })
+        ),
+        React.createElement('div', { className:'chat-input-area' },
+          file && React.createElement('div', { className:'file-attach-preview' },
+            '📎 ', file.name,
+            React.createElement('button', { onClick:()=>setFile(null) }, '×')
+          ),
+          React.createElement('div', { className:'chat-input-row' },
+            React.createElement('textarea', {
+              className:'chat-textarea',
+              placeholder: file ? 'Add description...' : 'Type a message...',
+              value: msgText,
+              onChange: e=>setMsgText(e.target.value),
+              rows: 1,
+              onKeyDown: e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); sendMessage(); } }
+            }),
+            React.createElement('button', { className:'chat-send-btn', onClick:sendMessage, disabled:sending },
+              sending ? '⏳' : '↑'
+            )
+          ),
+          React.createElement('div', { className:'chat-tools' },
+            React.createElement('select', { className:'msg-type-select', value:msgType, onChange:e=>setMsgType(e.target.value) },
+              React.createElement('option', { value:'text' }, '💬 Message'),
+              React.createElement('option', { value:'update' }, '📊 Progress Update')
+            ),
+            React.createElement('label', { className:'upload-label' },
+              '📎 Upload Signoff',
+              React.createElement('input', { type:'file', accept:'.pdf,.jpg,.jpeg,.png,.doc,.docx', onChange:e=>setFile(e.target.files[0]) })
+            )
+          )
+        )
+      )
+    )
+  );
+}
+
+// ─── Signoffs Page ────────────────────────────────────────────────────────────
+function SignoffsPage() {
+  const { user, token } = useAuth();
+  const [allSignoffs, setAllSignoffs] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    api.get('/tickets', token).then(async (tks) => {
+      const sigPs = await Promise.all(tks.map(t => api.get(`/tickets/${t.id}/signoffs`, token)));
+      const all = [];
+      sigPs.forEach((sigs, idx) => sigs.forEach(s => all.push({...s, ticket_id: tks[idx].id, ticket_title: tks[idx].title})));
+      setAllSignoffs(all);
+      setLoading(false);
+    });
+  }, []);
+
+  const fileIcon = (name) => {
+    const ext = name?.split('.').pop()?.toLowerCase();
+    if (['jpg','jpeg','png'].includes(ext)) return '🖼️';
+    if (ext === 'pdf') return '📄';
+    if (['doc','docx'].includes(ext)) return '📝';
+    return '📎';
+  };
+
+  return React.createElement('div', null,
+    React.createElement('div', { className:'section-header' },
+      React.createElement('span', { className:'section-title' }, `📋 ${(user?.permissions||[]).includes('signoffs.view_all') ? 'All' : 'My'} Signoff Reports (${allSignoffs.length})`)
+    ),
+    loading
+      ? React.createElement('div', { style:{color:'var(--text3)',padding:'40px'} }, '⏳ Loading...')
+      : allSignoffs.length === 0
+        ? React.createElement('div', { className:'empty-state' },
+            React.createElement('div', { className:'empty-state-icon' }, '📋'),
+            React.createElement('div', { className:'empty-state-text' }, 'No signoff reports yet'),
+            React.createElement('div', { className:'empty-state-sub' }, 'Upload reports from ticket chat')
+          )
+        : React.createElement('div', { className:'signoffs-grid' },
+            allSignoffs.map(s =>
+              React.createElement('div', { key:s.id, className:'signoff-card' },
+                React.createElement('div', { className:'signoff-icon' }, fileIcon(s.filename)),
+                React.createElement('div', { className:'signoff-ticket' }, s.ticket_id),
+                React.createElement('div', { className:'signoff-filename' }, s.filename),
+                s.description && React.createElement('div', { className:'signoff-meta', style:{marginTop:'4px'} }, s.description),
+                React.createElement('div', { className:'signoff-meta', style:{marginTop:'8px'} },
+                  `By ${s.uploaded_by} · ${new Date(s.timestamp).toLocaleDateString()}`
+                ),
+                React.createElement('a', {
+                  href:s.path, target:'_blank',
+                  className:'btn btn-outline btn-sm', style:{marginTop:'10px',display:'inline-flex'}
+                }, '↓ Download')
+              )
+            )
+          )
+  );
+}
+
+// ─── Users Page (full CRUD) ──────────────────────────────────────────────────
+function UsersPage() {
+  const { user: me, token } = useAuth();
+  const [users, setUsers] = useState([]);
+  const [showModal, setShowModal] = useState(false);
+  const [editUser, setEditUser] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [search, setSearch] = useState('');
+  const [roleFilter, setRoleFilter] = useState('');
+
+  const load = () => api.get('/users', token).then(setUsers).catch(()=>{});
+  useEffect(() => { load(); }, []);
+
+  const filtered = users.filter(u => {
+    const q = search.toLowerCase();
+    return (!q || u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q))
+      && (!roleFilter || u.role === roleFilter);
+  });
+
+  const handleDelete = async () => {
+    try {
+      await api.delete(`/users/${deleteTarget.id}`, token);
+      setDeleteTarget(null);
+      load();
+    } catch(e) { alert(e.message); }
+  };
+
+  const roleColor = r => r === 'admin' ? {bg:'rgba(79,110,247,.15)',color:'var(--accent2)'} : {bg:'rgba(34,197,94,.15)',color:'var(--green)'};
+
+  return React.createElement('div', null,
+    // Header
+    React.createElement('div', { className:'section-header' },
+      React.createElement('span', { className:'section-title' }, `👥 User Management (${filtered.length})`),
+      React.createElement('div', { className:'filters' },
+        React.createElement('input', { className:'search-input', placeholder:'Search name or email...', value:search, onChange:e=>setSearch(e.target.value) }),
+        React.createElement('select', { className:'filter-select', value:roleFilter, onChange:e=>setRoleFilter(e.target.value) },
+          React.createElement('option', { value:'' }, 'All Roles'),
+          React.createElement('option', { value:'admin' }, 'Admin'),
+          React.createElement('option', { value:'freelancer' }, 'Freelancer')
+        ),
+        React.createElement('button', { className:'btn btn-primary btn-sm', onClick:()=>{ setEditUser(null); setShowModal(true); } }, '+ Add User')
+      )
+    ),
+
+    // Stats row
+    React.createElement('div', { style:{display:'flex',gap:'12px',marginBottom:'20px'} },
+      [
+        { label:'Total Users', val: users.length, color:'var(--accent2)' },
+        { label:'Admins', val: users.filter(u=>u.role_name==='Admin').length, color:'var(--accent2)' },
+        { label:'Freelancers', val: users.filter(u=>u.role_name==='Freelancer').length, color:'var(--green)' },
+        { label:'Active', val: users.filter(u=>u.active!==false).length, color:'var(--green)' },
+        { label:'Inactive', val: users.filter(u=>u.active===false).length, color:'var(--text3)' },
+      ].map(s => React.createElement('div', { key:s.label, className:'stat-card', style:{flex:1} },
+        React.createElement('div', { className:'stat-label' }, s.label),
+        React.createElement('div', { className:'stat-value', style:{fontSize:'24px',color:s.color} }, s.val)
+      ))
+    ),
+
+    // Table
+    React.createElement('div', { className:'table-wrap' },
+      React.createElement('table', { className:'table' },
+        React.createElement('thead', null,
+          React.createElement('tr', null,
+            ['User','Email','Role','Phone','Skills','Status','Created','Actions'].map(h =>
+              React.createElement('th', { key:h }, h)
+            )
+          )
+        ),
+        React.createElement('tbody', null,
+          filtered.length === 0
+            ? React.createElement('tr', null,
+                React.createElement('td', { colSpan:8 },
+                  React.createElement('div', { className:'empty-state' },
+                    React.createElement('div', { className:'empty-state-icon' }, '👥'),
+                    React.createElement('div', { className:'empty-state-text' }, 'No users found')
+                  )
+                )
+              )
+            : filtered.map(u => {
+                const rc = roleColor(u.role);
+                const isMe = u.id === me.id;
+                return React.createElement('tr', { key:u.id, onClick:()=>{ setEditUser(u); setShowModal(true); } },
+                  React.createElement('td', null,
+                    React.createElement('div', { style:{display:'flex',alignItems:'center',gap:'10px'} },
+                      React.createElement('div', { className:'avatar', style:{background:rc.bg, color:rc.color, width:'34px',height:'34px',borderRadius:'8px',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:'700',fontSize:'14px',flexShrink:0} }, u.avatar || u.name[0]),
+                      React.createElement('div', null,
+                        React.createElement('div', { style:{fontWeight:600,fontSize:'14px'} },
+                          u.name,
+                          isMe && React.createElement('span', { style:{fontSize:'10px',background:'rgba(79,110,247,.15)',color:'var(--accent2)',padding:'2px 6px',borderRadius:'4px',marginLeft:'6px',fontWeight:'600'} }, 'YOU')
+                        )
+                      )
+                    )
+                  ),
+                  React.createElement('td', null, React.createElement('span', { style:{fontSize:'13px',color:'var(--text2)',fontFamily:'var(--mono)'} }, u.email)),
+                  React.createElement('td', null, React.createElement('span', { style:{padding:'3px 9px',borderRadius:'6px',fontSize:'11px',fontWeight:'600',background:(u.role_color||'#4f6ef7')+'22',color:u.role_color||'#4f6ef7',border:`1px solid ${(u.role_color||'#4f6ef7')}44`} }, u.role_name||u.role)),
+                  React.createElement('td', null, React.createElement('span', { style:{fontSize:'13px',color:'var(--text2)'} }, u.phone || '—')),
+                  React.createElement('td', null, React.createElement('span', { style:{fontSize:'12px',color:'var(--text2)',maxWidth:'140px',display:'block',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'} }, u.skills || '—')),
+                  React.createElement('td', null,
+                    React.createElement('span', { style:{display:'flex',alignItems:'center',gap:'5px',fontSize:'13px'} },
+                      React.createElement('span', { style:{width:'7px',height:'7px',borderRadius:'50%',background:u.active===false?'var(--text3)':'var(--green)',display:'inline-block'} }),
+                      u.active===false ? 'Inactive' : 'Active'
+                    )
+                  ),
+                  React.createElement('td', null, React.createElement('span', { style:{fontSize:'12px',color:'var(--text2)',fontFamily:'var(--mono)'} }, u.created_at ? new Date(u.created_at).toLocaleDateString() : '—')),
+                  React.createElement('td', null,
+                    React.createElement('div', { style:{display:'flex',gap:'6px'}, onClick:e=>e.stopPropagation() },
+                      React.createElement('button', {
+                        className:'btn btn-outline btn-sm',
+                        onClick:e=>{ e.stopPropagation(); setEditUser(u); setShowModal(true); }
+                      }, '✏️ Edit'),
+                      !isMe && React.createElement('button', {
+                        className:'btn btn-danger btn-sm',
+                        onClick:e=>{ e.stopPropagation(); setDeleteTarget(u); }
+                      }, '🗑️')
+                    )
+                  )
+                );
+              })
+        )
+      )
+    ),
+
+    // Create/Edit Modal
+    showModal && React.createElement(UserModal, {
+      user: editUser,
+      onClose: () => { setShowModal(false); setEditUser(null); },
+      onSaved: () => { load(); setShowModal(false); setEditUser(null); }
+    }),
+
+    // Delete Confirm Modal
+    deleteTarget && React.createElement('div', { className:'modal-overlay', onClick:e=>e.target===e.currentTarget&&setDeleteTarget(null) },
+      React.createElement('div', { className:'modal fade-in', style:{maxWidth:'400px'} },
+        React.createElement('div', { className:'modal-header' },
+          React.createElement('span', { className:'modal-title' }, '⚠️ Delete User'),
+          React.createElement('button', { className:'modal-close', onClick:()=>setDeleteTarget(null) }, '✕')
+        ),
+        React.createElement('div', { className:'modal-body' },
+          React.createElement('p', { style:{color:'var(--text2)',fontSize:'14px',lineHeight:'1.6'} },
+            `Are you sure you want to delete `,
+            React.createElement('strong', { style:{color:'var(--text)'} }, deleteTarget.name),
+            `? This action cannot be undone.`
+          ),
+          React.createElement('div', { style:{marginTop:'12px',padding:'12px',background:'rgba(239,68,68,.08)',border:'1px solid rgba(239,68,68,.2)',borderRadius:'8px',fontSize:'13px',color:'var(--red)'} },
+            `⚠️ All tickets assigned to this user will remain but show no assignee.`
+          )
+        ),
+        React.createElement('div', { className:'modal-footer' },
+          React.createElement('button', { className:'btn btn-outline', onClick:()=>setDeleteTarget(null) }, 'Cancel'),
+          React.createElement('button', { className:'btn btn-danger', onClick:handleDelete }, '🗑️ Delete User')
+        )
+      )
+    )
+  );
+}
+
+// ─── User Create / Edit Modal ─────────────────────────────────────────────────
+function UserModal({ user: editUser, onClose, onSaved }) {
+  const { token } = useAuth();
+  const isEdit = !!editUser;
+  const [form, setForm] = useState({
+    name: editUser?.name || '',
+    email: editUser?.email || '',
+    password: '',
+    role_id: editUser?.role_id || 'role_freelancer',
+    phone: editUser?.phone || '',
+    skills: editUser?.skills || '',
+    active: editUser?.active !== false,
+  });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  const submit = async () => {
+    setError(''); setLoading(true);
+    try {
+      if (isEdit) {
+        const payload = {};
+        if (form.name !== editUser.name) payload.name = form.name;
+        if (form.role_id !== editUser.role_id) payload.role_id = form.role_id;
+        if (form.phone !== (editUser.phone||'')) payload.phone = form.phone;
+        if (form.skills !== (editUser.skills||'')) payload.skills = form.skills;
+        if (form.active !== (editUser.active !== false)) payload.active = form.active;
+        if (form.password) payload.password = form.password;
+        await api.patch(`/users/${editUser.id}`, payload, token);
+      } else {
+        if (!form.name.trim()) throw new Error('Name is required');
+        if (!form.email.trim()) throw new Error('Email is required');
+        if (!form.password) throw new Error('Password is required');
+        await api.post('/users', {...form, role_id: form.role_id}, token);
+      }
+      onSaved();
+    } catch(e) { setError(e.message); }
+    finally { setLoading(false); }
+  };
+
+  return React.createElement('div', { className:'modal-overlay', onClick:e=>e.target===e.currentTarget&&onClose() },
+    React.createElement('div', { className:'modal fade-in' },
+      React.createElement('div', { className:'modal-header' },
+        React.createElement('span', { className:'modal-title' }, isEdit ? `✏️ Edit — ${editUser.name}` : '+ Create New User'),
+        React.createElement('button', { className:'modal-close', onClick:onClose }, '✕')
+      ),
+      React.createElement('div', { className:'modal-body' },
+        error && React.createElement('div', { className:'error-msg' }, error),
+
+        // Dynamic Role selector
+        React.createElement(RoleSelector, { value: form.role_id, onChange: v=>set('role_id',v) }),
+
+        React.createElement('div', { className:'form-row' },
+          React.createElement('div', { className:'form-field' },
+            React.createElement('label', null, 'Full Name *'),
+            React.createElement('input', { value:form.name, onChange:e=>set('name',e.target.value), placeholder:'e.g. Ravi Kumar' })
+          ),
+          React.createElement('div', { className:'form-field' },
+            React.createElement('label', null, 'Email Address *'),
+            React.createElement('input', { type:'email', value:form.email, onChange:e=>set('email',e.target.value), placeholder:'ravi@company.com', disabled:isEdit, style:isEdit?{opacity:.5,cursor:'not-allowed'}:{} })
+          )
+        ),
+
+        React.createElement('div', { className:'form-row' },
+          React.createElement('div', { className:'form-field' },
+            React.createElement('label', null, isEdit ? 'New Password (leave blank to keep)' : 'Password *'),
+            React.createElement('input', { type:'password', value:form.password, onChange:e=>set('password',e.target.value), placeholder: isEdit ? '••••••••' : 'Min 6 characters' })
+          ),
+          React.createElement('div', { className:'form-field' },
+            React.createElement('label', null, 'Phone'),
+            React.createElement('input', { value:form.phone, onChange:e=>set('phone',e.target.value), placeholder:'+91 98765 43210' })
+          )
+        ),
+
+        React.createElement('div', { className:'form-field' },
+          React.createElement('label', null, 'Skills / Specialization'),
+          React.createElement('input', { value:form.skills, onChange:e=>set('skills',e.target.value), placeholder:'e.g. Network Installation, Fiber Optics, CCTV' })
+        ),
+
+        isEdit && React.createElement('div', { className:'form-field' },
+          React.createElement('label', null, 'Account Status'),
+          React.createElement('div', { style:{display:'flex',gap:'10px'} },
+            [true,false].map(v =>
+              React.createElement('div', {
+                key:String(v),
+                onClick:()=>set('active',v),
+                style:{
+                  flex:1, padding:'10px 14px', borderRadius:'8px', cursor:'pointer',
+                  border:`2px solid ${form.active===v?(v?'var(--green)':'var(--red)'):'var(--border)'}`,
+                  background: form.active===v?(v?'rgba(34,197,94,.1)':'rgba(239,68,68,.1)'):'var(--surface2)',
+                  textAlign:'center', transition:'all .15s'
+                }
+              },
+                React.createElement('div', { style:{fontWeight:700,fontSize:'13px',color:form.active===v?(v?'var(--green)':'var(--red)'):'var(--text2)'} },
+                  v ? '✅ Active' : '🚫 Inactive'
+                ),
+                React.createElement('div', { style:{fontSize:'11px',color:'var(--text3)',marginTop:'2px'} },
+                  v ? 'Can log in' : 'Login blocked'
+                )
+              )
+            )
+          )
+        )
+      ),
+      React.createElement('div', { className:'modal-footer' },
+        React.createElement('button', { className:'btn btn-outline', onClick:onClose }, 'Cancel'),
+        React.createElement('button', { className:'btn btn-primary', onClick:submit, disabled:loading },
+          loading ? '⏳ Saving...' : (isEdit ? '✓ Save Changes' : '✓ Create User')
+        )
+      )
+    )
+  );
+}
+
+
+// ─── Role Selector widget (used in UserModal) ─────────────────────────────────
+function RoleSelector({ value, onChange }) {
+  const { token } = useAuth();
+  const [roles, setRoles] = useState([]);
+  useEffect(() => { api.get('/roles', token).then(setRoles).catch(()=>{}); }, []);
+  return React.createElement('div', { className:'form-field' },
+    React.createElement('label', null, 'Role *'),
+    React.createElement('div', { style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(200px,1fr))',gap:'8px',marginTop:'4px'} },
+      roles.map(r =>
+        React.createElement('div', {
+          key: r.id, onClick: ()=>onChange(r.id),
+          style:{
+            padding:'10px 14px', borderRadius:'10px', cursor:'pointer', transition:'all .15s',
+            border: `2px solid ${value===r.id ? r.color : 'var(--border)'}`,
+            background: value===r.id ? r.color+'18' : 'var(--surface2)',
+          }
+        },
+          React.createElement('div', { style:{display:'flex',alignItems:'center',gap:'7px',marginBottom:'3px'} },
+            React.createElement('span', { style:{width:'9px',height:'9px',borderRadius:'50%',background:r.color,display:'inline-block',flexShrink:0} }),
+            React.createElement('span', { style:{fontWeight:700,fontSize:'13px',color:value===r.id?r.color:'var(--text)'} }, r.name),
+            r.is_system && React.createElement('span', { style:{fontSize:'9px',background:'var(--surface3)',color:'var(--text3)',padding:'1px 5px',borderRadius:'4px',marginLeft:'auto'} }, 'SYSTEM')
+          ),
+          React.createElement('div', { style:{fontSize:'11px',color:'var(--text3)',lineHeight:'1.4'} }, r.description || ''),
+          React.createElement('div', { style:{fontSize:'10px',color:'var(--text3)',marginTop:'4px'} }, `${(r.permissions||[]).length} permissions`)
+        )
+      )
+    )
+  );
+}
+
+// ─── Roles Page ───────────────────────────────────────────────────────────────
+function RolesPage() {
+  const { token } = useAuth();
+  const [roles, setRoles] = useState([]);
+  const [allPerms, setAllPerms] = useState([]);
+  const [permGroups, setPermGroups] = useState({});
+  const [showModal, setShowModal] = useState(false);
+  const [editRole, setEditRole] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [expandedRole, setExpandedRole] = useState(null);
+
+  const load = () => {
+    api.get('/roles', token).then(setRoles).catch(()=>{});
+    api.get('/permissions', token).then(d => { setAllPerms(d.permissions||[]); setPermGroups(d.groups||{}); }).catch(()=>{});
+  };
+  useEffect(() => { load(); }, []);
+
+  const handleDelete = async () => {
+    try { await api.delete(`/roles/${deleteTarget.id}`, token); setDeleteTarget(null); load(); }
+    catch(e) { alert(e.message); }
+  };
+
+  const permLabel = p => ({
+    'tickets.view_all':'View all tickets','tickets.create':'Create tickets',
+    'tickets.edit_any':'Edit any ticket','tickets.edit_assigned':'Edit assigned tickets',
+    'tickets.delete':'Delete tickets','tickets.assign':'Assign tickets',
+    'messages.view':'View chat','messages.send':'Send messages',
+    'signoffs.upload':'Upload signoffs','signoffs.view_all':'View all signoffs',
+    'users.view':'View users','users.create':'Create users',
+    'users.edit':'Edit users','users.delete':'Delete users',
+    'roles.view':'View roles','roles.manage':'Manage roles',
+    'dashboard.view_all':'Full dashboard',
+  }[p] || p);
+
+  return React.createElement('div', null,
+    // Header
+    React.createElement('div', { className:'section-header' },
+      React.createElement('span', { className:'section-title' }, `🛡️ Roles & Permissions (${roles.length})`),
+      React.createElement('button', { className:'btn btn-primary btn-sm', onClick:()=>{ setEditRole(null); setShowModal(true); } }, '+ New Role')
+    ),
+
+    // Role cards grid
+    React.createElement('div', { style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(340px,1fr))',gap:'14px'} },
+      roles.map(role => {
+        const isExpanded = expandedRole === role.id;
+        return React.createElement('div', {
+          key: role.id,
+          className: 'card',
+          style:{borderColor: isExpanded ? role.color : 'var(--border)', transition:'border-color .2s', padding:'0'}
+        },
+          // Card header
+          React.createElement('div', {
+            style:{padding:'16px 18px',display:'flex',alignItems:'center',gap:'12px',cursor:'pointer'},
+            onClick:()=>setExpandedRole(isExpanded ? null : role.id)
+          },
+            React.createElement('div', {
+              style:{width:'38px',height:'38px',borderRadius:'9px',background:role.color+'20',
+                     display:'flex',alignItems:'center',justifyContent:'center',fontSize:'18px',flexShrink:0}
+            }, '🛡️'),
+            React.createElement('div', { style:{flex:1,minWidth:0} },
+              React.createElement('div', { style:{display:'flex',alignItems:'center',gap:'8px'} },
+                React.createElement('span', { style:{fontWeight:700,fontSize:'15px'} }, role.name),
+                role.is_system && React.createElement('span', { style:{fontSize:'10px',background:'var(--surface3)',color:'var(--text3)',padding:'2px 6px',borderRadius:'4px',fontWeight:600} }, 'SYSTEM'),
+                React.createElement('span', { style:{marginLeft:'auto',fontSize:'12px',color:'var(--text3)'} }, `${role.user_count} user${role.user_count!==1?'s':''}`)
+              ),
+              React.createElement('div', { style:{fontSize:'12px',color:'var(--text2)',marginTop:'2px',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'} }, role.description)
+            ),
+            React.createElement('span', { style:{color:'var(--text3)',fontSize:'12px',marginLeft:'4px'} }, isExpanded ? '▲' : '▼')
+          ),
+
+          // Permission chips
+          React.createElement('div', { style:{padding:'0 18px 14px',display:'flex',flexWrap:'wrap',gap:'5px'} },
+            (role.permissions||[]).slice(0, isExpanded ? 999 : 4).map(p =>
+              React.createElement('span', { key:p, style:{
+                fontSize:'11px',padding:'3px 8px',borderRadius:'5px',
+                background:role.color+'15',color:role.color,border:`1px solid ${role.color}30`,fontWeight:500
+              }}, permLabel(p))
+            ),
+            !isExpanded && (role.permissions||[]).length > 4 &&
+              React.createElement('span', { style:{fontSize:'11px',padding:'3px 8px',borderRadius:'5px',background:'var(--surface3)',color:'var(--text3)'} },
+                `+${(role.permissions||[]).length - 4} more`)
+          ),
+
+          // Actions
+          React.createElement('div', { style:{padding:'10px 18px',borderTop:'1px solid var(--border)',display:'flex',gap:'8px'} },
+            React.createElement('button', {
+              className:'btn btn-outline btn-sm',
+              onClick:e=>{ e.stopPropagation(); setEditRole(role); setShowModal(true); }
+            }, '✏️ Edit'),
+            !role.is_system && React.createElement('button', {
+              className:'btn btn-danger btn-sm',
+              onClick:e=>{ e.stopPropagation(); setDeleteTarget(role); }
+            }, '🗑️ Delete'),
+            role.is_system && React.createElement('span', { style:{fontSize:'11px',color:'var(--text3)',alignSelf:'center',marginLeft:'4px'} }, '🔒 System role')
+          )
+        );
+      })
+    ),
+
+    // Create/Edit modal
+    showModal && React.createElement(RoleModal, {
+      role: editRole, allPerms, permGroups,
+      onClose:()=>{ setShowModal(false); setEditRole(null); },
+      onSaved:()=>{ load(); setShowModal(false); setEditRole(null); }
+    }),
+
+    // Delete confirm
+    deleteTarget && React.createElement('div', { className:'modal-overlay', onClick:e=>e.target===e.currentTarget&&setDeleteTarget(null) },
+      React.createElement('div', { className:'modal fade-in', style:{maxWidth:'400px'} },
+        React.createElement('div', { className:'modal-header' },
+          React.createElement('span', { className:'modal-title' }, '⚠️ Delete Role'),
+          React.createElement('button', { className:'modal-close', onClick:()=>setDeleteTarget(null) }, '✕')
+        ),
+        React.createElement('div', { className:'modal-body' },
+          React.createElement('p', { style:{color:'var(--text2)',fontSize:'14px',lineHeight:'1.6'} },
+            'Delete role ', React.createElement('strong', { style:{color:'var(--text)'} }, deleteTarget.name), '?'
+          ),
+          deleteTarget.user_count > 0 && React.createElement('div', { style:{marginTop:'10px',padding:'10px 12px',background:'rgba(239,68,68,.08)',border:'1px solid rgba(239,68,68,.2)',borderRadius:'8px',fontSize:'13px',color:'var(--red)'} },
+            `⚠️ ${deleteTarget.user_count} user(s) are assigned this role. Reassign them first.`
+          )
+        ),
+        React.createElement('div', { className:'modal-footer' },
+          React.createElement('button', { className:'btn btn-outline', onClick:()=>setDeleteTarget(null) }, 'Cancel'),
+          React.createElement('button', { className:'btn btn-danger', onClick:handleDelete, disabled:deleteTarget.user_count>0 }, '🗑️ Delete Role')
+        )
+      )
+    )
+  );
+}
+
+// ─── Role Create/Edit Modal ───────────────────────────────────────────────────
+function RoleModal({ role: editRole, allPerms, permGroups, onClose, onSaved }) {
+  const { token } = useAuth();
+  const isEdit = !!editRole;
+  const [form, setForm] = useState({
+    name: editRole?.name || '',
+    description: editRole?.description || '',
+    color: editRole?.color || '#4f6ef7',
+    permissions: editRole?.permissions || [],
+  });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const set = (k,v) => setForm(f=>({...f,[k]:v}));
+
+  const togglePerm = (p) => {
+    set('permissions', form.permissions.includes(p)
+      ? form.permissions.filter(x=>x!==p)
+      : [...form.permissions, p]);
+  };
+
+  const toggleGroup = (group) => {
+    const groupPerms = permGroups[group] || [];
+    const allOn = groupPerms.every(p => form.permissions.includes(p));
+    if (allOn) set('permissions', form.permissions.filter(p => !groupPerms.includes(p)));
+    else set('permissions', [...new Set([...form.permissions, ...groupPerms])]);
+  };
+
+  const submit = async () => {
+    setError(''); setLoading(true);
+    try {
+      if (isEdit) await api.patch(`/roles/${editRole.id}`, form, token);
+      else await api.post('/roles', form, token);
+      onSaved();
+    } catch(e) { setError(e.message); }
+    finally { setLoading(false); }
+  };
+
+  const COLORS = ['#4f6ef7','#22c55e','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#f97316','#ec4899','#8b93b0'];
+
+  const permLabel = p => ({
+    'tickets.view_all':'View all tickets','tickets.create':'Create tickets',
+    'tickets.edit_any':'Edit any ticket','tickets.edit_assigned':'Edit assigned tickets',
+    'tickets.delete':'Delete tickets','tickets.assign':'Assign tickets',
+    'messages.view':'View chat','messages.send':'Send messages',
+    'signoffs.upload':'Upload signoffs','signoffs.view_all':'View all signoffs',
+    'users.view':'View users','users.create':'Create users',
+    'users.edit':'Edit users','users.delete':'Delete users',
+    'roles.view':'View roles','roles.manage':'Manage roles',
+    'dashboard.view_all':'Full dashboard',
+  }[p] || p);
+
+  return React.createElement('div', { className:'modal-overlay', onClick:e=>e.target===e.currentTarget&&onClose() },
+    React.createElement('div', { className:'modal fade-in', style:{width:'660px',maxWidth:'95vw'} },
+      React.createElement('div', { className:'modal-header' },
+        React.createElement('span', { className:'modal-title' }, isEdit ? `✏️ Edit Role — ${editRole.name}` : '+ Create New Role'),
+        React.createElement('button', { className:'modal-close', onClick:onClose }, '✕')
+      ),
+      React.createElement('div', { className:'modal-body' },
+        error && React.createElement('div', { className:'error-msg' }, error),
+
+        // Name + color row
+        React.createElement('div', { className:'form-row' },
+          React.createElement('div', { className:'form-field' },
+            React.createElement('label', null, 'Role Name *'),
+            React.createElement('input', { value:form.name, onChange:e=>set('name',e.target.value), placeholder:'e.g. Site Manager', disabled:isEdit&&editRole?.is_system, style:isEdit&&editRole?.is_system?{opacity:.5}:{} })
+          ),
+          React.createElement('div', { className:'form-field' },
+            React.createElement('label', null, 'Description'),
+            React.createElement('input', { value:form.description, onChange:e=>set('description',e.target.value), placeholder:'What can this role do?', disabled:isEdit&&editRole?.is_system, style:isEdit&&editRole?.is_system?{opacity:.5}:{} })
+          )
+        ),
+
+        // Color picker
+        React.createElement('div', { className:'form-field' },
+          React.createElement('label', null, 'Badge Color'),
+          React.createElement('div', { style:{display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap',marginTop:'4px'} },
+            COLORS.map(c =>
+              React.createElement('div', {
+                key:c, onClick:()=>!isEdit||!editRole?.is_system ? set('color',c) : null,
+                style:{width:'26px',height:'26px',borderRadius:'6px',background:c,cursor:'pointer',
+                       border:`3px solid ${form.color===c?'white':'transparent'}`,
+                       boxShadow:form.color===c?`0 0 0 2px ${c}`:'none',transition:'all .1s'}
+              })
+            ),
+            React.createElement('input', { type:'color', value:form.color, onChange:e=>set('color',e.target.value), style:{width:'30px',height:'26px',padding:'1px',borderRadius:'6px',border:'1px solid var(--border)',background:'transparent',cursor:'pointer'} })
+          )
+        ),
+
+        // Permission matrix
+        React.createElement('div', { className:'form-field' },
+          React.createElement('div', { style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'10px'} },
+            React.createElement('label', { style:{margin:0} }, `Permissions (${form.permissions.length} selected)`),
+            React.createElement('div', { style:{display:'flex',gap:'6px'} },
+              React.createElement('button', { className:'btn btn-outline btn-sm', onClick:()=>set('permissions',[...allPerms]) }, 'Select All'),
+              React.createElement('button', { className:'btn btn-outline btn-sm', onClick:()=>set('permissions',[]) }, 'Clear All')
+            )
+          ),
+          React.createElement('div', { style:{display:'flex',flexDirection:'column',gap:'14px'} },
+            Object.entries(permGroups).map(([group, perms]) => {
+              const allOn = perms.every(p=>form.permissions.includes(p));
+              const someOn = perms.some(p=>form.permissions.includes(p));
+              return React.createElement('div', { key:group },
+                React.createElement('div', {
+                  style:{display:'flex',alignItems:'center',gap:'8px',marginBottom:'7px',cursor:'pointer'},
+                  onClick:()=>toggleGroup(group)
+                },
+                  React.createElement('div', { style:{
+                    width:'16px',height:'16px',borderRadius:'4px',flexShrink:0,
+                    background: allOn ? form.color : someOn ? form.color+'60' : 'var(--surface3)',
+                    border:`2px solid ${allOn||someOn ? form.color : 'var(--border)'}`,
+                    display:'flex',alignItems:'center',justifyContent:'center',fontSize:'10px',color:'white'
+                  }}, allOn ? '✓' : someOn ? '−' : ''),
+                  React.createElement('span', { style:{fontWeight:700,fontSize:'12px',textTransform:'uppercase',letterSpacing:'0.5px',color:'var(--text2)'} }, group)
+                ),
+                React.createElement('div', { style:{display:'flex',flexWrap:'wrap',gap:'6px',paddingLeft:'24px'} },
+                  perms.map(p => {
+                    const on = form.permissions.includes(p);
+                    return React.createElement('div', {
+                      key:p, onClick:()=>togglePerm(p),
+                      style:{
+                        display:'flex',alignItems:'center',gap:'6px',padding:'6px 10px',
+                        borderRadius:'7px',cursor:'pointer',transition:'all .1s',
+                        background: on ? form.color+'18' : 'var(--surface2)',
+                        border:`1px solid ${on ? form.color+'60' : 'var(--border)'}`,
+                      }
+                    },
+                      React.createElement('div', { style:{
+                        width:'14px',height:'14px',borderRadius:'3px',flexShrink:0,
+                        background: on ? form.color : 'var(--surface3)',
+                        border:`1.5px solid ${on ? form.color : 'var(--border)'}`,
+                        display:'flex',alignItems:'center',justifyContent:'center',fontSize:'9px',color:'white'
+                      }}, on ? '✓' : ''),
+                      React.createElement('span', { style:{fontSize:'12px',fontWeight:on?600:400,color:on?form.color:'var(--text2)'} }, permLabel(p))
+                    );
+                  })
+                )
+              );
+            })
+          )
+        )
+      ),
+      React.createElement('div', { className:'modal-footer' },
+        React.createElement('span', { style:{fontSize:'12px',color:'var(--text3)',marginRight:'auto'} }, `${form.permissions.length} of ${allPerms.length} permissions selected`),
+        React.createElement('button', { className:'btn btn-outline', onClick:onClose }, 'Cancel'),
+        React.createElement('button', { className:'btn btn-primary', onClick:submit, disabled:loading },
+          loading ? '⏳ Saving...' : (isEdit ? '✓ Save Changes' : '✓ Create Role')
+        )
+      )
+    )
+  );
+}
+
+// ─── App ──────────────────────────────────────────────────────────────────────
+function App() {
+  const { user } = useAuth();
+  const [page, setPage] = useState('dashboard');
+  const [selectedTicket, setSelectedTicket] = useState(null);
+
+  if (!user) return React.createElement(LoginPage, null);
+
+  const pageTitle = {
+    dashboard: '📊 Dashboard', tickets: '🎫 Tickets',
+    'ticket-detail': '🎫 Ticket Detail', signoffs: '📋 Signoffs', users: '👥 User Management', roles: '🛡️ Roles & Permissions'
+  };
+
+  return React.createElement('div', { className:'app-layout' },
+    React.createElement(Sidebar, { page, setPage }),
+    React.createElement('div', { className:'main' },
+      React.createElement('div', { className:'topbar' },
+        React.createElement('span', { className:'topbar-title' }, pageTitle[page] || 'Portal'),
+        React.createElement('div', { className:'topbar-actions' },
+          React.createElement('span', { style:{padding:'3px 9px',borderRadius:'6px',fontSize:'11px',fontWeight:'600',background:(user.role_color||'#4f6ef7')+'22',color:user.role_color||'#4f6ef7',border:`1px solid ${(user.role_color||'#4f6ef7')}44`} }, user.role_name || user.role),
+          React.createElement('span', { style:{fontSize:'13px',color:'var(--text2)'} }, user.name)
+        )
+      ),
+      React.createElement('div', { className:'page fade-in', key:page },
+        page === 'dashboard' && React.createElement(DashboardPage, { setPage, setSelectedTicket }),
+        page === 'tickets' && React.createElement(TicketsPage, { setPage, setSelectedTicket }),
+        page === 'ticket-detail' && React.createElement(TicketDetailPage, { ticketId:selectedTicket, setPage }),
+        page === 'signoffs' && React.createElement(SignoffsPage, null),
+        page === 'users' && React.createElement(UsersPage, null),
+        page === 'roles' && React.createElement(RolesPage, null)
+      )
+    )
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(
+  React.createElement(AuthProvider, null, React.createElement(App, null))
+);
+</script>
+</body>
+</html>
