@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, joinedload
 import bcrypt, uuid, os, shutil, time
 
 from database import engine, get_db, Base
-from models import Role, User, Ticket, Message, Signoff, ALL_PERMISSIONS, PERMISSION_GROUPS
+from models import Company, Product, Role, User, Ticket, Message, Signoff, ALL_PERMISSIONS, PERMISSION_GROUPS
 import seed as seed_module
 import migrate as migrate_module
 
@@ -65,7 +65,7 @@ def get_current_user(creds: HTTPAuthorizationCredentials = Depends(security),
         payload = jwt.decode(creds.credentials, SECRET_KEY, algorithms=[ALGORITHM])
         email = payload.get("sub")
         if not email: raise HTTPException(401, "Invalid token")
-        user = db.query(User).options(joinedload(User.role_obj)).filter(User.email == email).first()
+        user = db.query(User).options(joinedload(User.role_obj), joinedload(User.company)).filter(User.email == email).first()
         if not user: raise HTTPException(401, "User not found")
         if not user.active: raise HTTPException(403, "Account inactive")
         return user
@@ -79,13 +79,91 @@ def require_perm(perm: str):
         return user
     return checker
 
+def is_super_admin(user: User) -> bool:
+    return user.can("companies.manage")
+
+def scoped_users_query(db: Session, user: User):
+    q = db.query(User).options(joinedload(User.role_obj), joinedload(User.company))
+    if not is_super_admin(user):
+        q = q.filter(User.company_id == user.company_id)
+    return q
+
+def scoped_tickets_query(db: Session, user: User):
+    q = db.query(Ticket).options(joinedload(Ticket.company), joinedload(Ticket.product))
+    if not is_super_admin(user):
+        q = q.filter(Ticket.company_id == user.company_id)
+    if not user.can("tickets.view_all"):
+        q = q.filter(Ticket.assigned_to == user.id)
+    return q
+
+def scoped_products_query(db: Session, user: User, active_only: bool = False):
+    q = db.query(Product).options(joinedload(Product.company))
+    if not is_super_admin(user):
+        q = q.filter(Product.company_id == user.company_id)
+    if active_only:
+        q = q.filter(Product.active == True)
+    return q
+
+def can_access_ticket(user: User, ticket: Ticket) -> bool:
+    if is_super_admin(user):
+        return True
+    if ticket.company_id != user.company_id:
+        return False
+    return user.can("tickets.view_all") or ticket.assigned_to == user.id
+
+def require_ticket_access(ticket: Ticket, user: User):
+    if not can_access_ticket(user, ticket):
+        raise HTTPException(403, "Access denied")
+
+def role_is_customer_limited(role: Role) -> bool:
+    perms = set(role.permissions or [])
+    return "companies.manage" not in perms
+
+def validate_escalation_users(db: Session, company_id: str, user_ids: List[str]) -> List[str]:
+    ordered_ids = list(dict.fromkeys([uid for uid in user_ids if uid]))
+    if not ordered_ids:
+        raise HTTPException(400, "At least one escalation person is required")
+    users = db.query(User).options(joinedload(User.role_obj)).filter(User.id.in_(ordered_ids)).all()
+    by_id = {u.id: u for u in users}
+    missing = [uid for uid in ordered_ids if uid not in by_id]
+    if missing:
+        raise HTTPException(400, f"Invalid escalation user(s): {', '.join(missing)}")
+    for uid in ordered_ids:
+        escalation_user = by_id[uid]
+        if not escalation_user.active:
+            raise HTTPException(400, f"{escalation_user.name} is inactive")
+        if escalation_user.company_id != company_id:
+            raise HTTPException(400, "Escalation people must belong to the selected company")
+        if "tickets.edit_assigned" not in (escalation_user.permissions or []):
+            raise HTTPException(400, f"{escalation_user.name} cannot own assigned tickets")
+    return ordered_ids
+
+def resolve_product_assignee(db: Session, product: Product) -> str:
+    for user_id in product.escalation_user_ids or []:
+        escalation_user = db.query(User).options(joinedload(User.role_obj)).filter(User.id == user_id, User.active == True).first()
+        if (escalation_user and escalation_user.company_id == product.company_id
+                and "tickets.edit_assigned" in (escalation_user.permissions or [])):
+            return escalation_user.id
+    raise HTTPException(400, "Selected product has no active escalation owner")
+
 # ─── Serialisers ─────────────────────────────────────────────────────────────
-def ser_role(r: Role) -> dict:
+def ser_company(c: Company) -> dict:
+    return {
+        "id": c.id, "name": c.name, "code": c.code,
+        "active": True if c.active is None else c.active,
+        "created_at": c.created_at.isoformat() if c.created_at else "",
+        "updated_at": c.updated_at.isoformat() if c.updated_at else "",
+    }
+
+def ser_role(r: Role, viewer: Optional[User] = None) -> dict:
+    users = r.users or []
+    if viewer and not is_super_admin(viewer):
+        users = [u for u in users if u.company_id == viewer.company_id]
     return {
         "id": r.id, "name": r.name, "description": r.description or "",
         "color": r.color or "#4f6ef7", "is_system": r.is_system,
         "permissions": r.permissions or [],
-        "user_count": len(r.users) if r.users else 0,
+        "user_count": len(users),
         "created_at": r.created_at.isoformat() if r.created_at else "",
     }
 
@@ -94,6 +172,8 @@ def ser_user(u: User) -> dict:
         "id": u.id, "email": u.email, "name": u.name,
         "role_id": u.role_id, "role_name": u.role_obj.name if u.role_obj else "",
         "role_color": u.role_obj.color if u.role_obj else "#8b93b0",
+        "company_id": u.company_id,
+        "company_name": u.company.name if u.company else "",
         "permissions": u.permissions,
         "phone": u.phone or "", "skills": u.skills or "",
         "avatar": u.avatar or u.name[0].upper(),
@@ -102,12 +182,34 @@ def ser_user(u: User) -> dict:
         "updated_at": u.updated_at.isoformat() if u.updated_at else "",
     }
 
+def ser_product(p: Product, db: Optional[Session] = None) -> dict:
+    escalation_ids = p.escalation_user_ids or []
+    people = []
+    if db and escalation_ids:
+        users = db.query(User).options(joinedload(User.role_obj)).filter(User.id.in_(escalation_ids)).all()
+        by_id = {u.id: u for u in users}
+        people = [ser_user(by_id[uid]) for uid in escalation_ids if uid in by_id]
+    return {
+        "id": p.id, "name": p.name, "code": p.code or "",
+        "company_id": p.company_id,
+        "company_name": p.company.name if p.company else "",
+        "escalation_user_ids": escalation_ids,
+        "escalation_people": people,
+        "active": True if p.active is None else p.active,
+        "created_at": p.created_at.isoformat() if p.created_at else "",
+        "updated_at": p.updated_at.isoformat() if p.updated_at else "",
+    }
+
 def ser_ticket(t: Ticket) -> dict:
     return {
         "id": t.id, "title": t.title, "description": t.description,
-        "customer": t.customer, "assigned_to": t.assigned_to,
+        "customer": t.customer, "company_id": t.company_id,
+        "company_name": t.company.name if t.company else t.customer,
+        "product_id": t.product_id,
+        "product_name": t.product.name if t.product else "",
+        "assigned_to": t.assigned_to,
         "status": t.status, "priority": t.priority, "type": t.type,
-        "budget": t.budget, "progress": t.progress, "due_date": t.due_date,
+        "progress": t.progress, "due_date": t.due_date,
         "milestones": t.milestones or [], "created_by": t.created_by,
         "created_at": t.created_at.isoformat() if t.created_at else "",
         "updated_at": t.updated_at.isoformat() if t.updated_at else "",
@@ -135,6 +237,29 @@ def ser_signoff(s: Signoff) -> dict:
 class LoginRequest(BaseModel):
     email: str; password: str
 
+class CompanyCreate(BaseModel):
+    name: str
+    code: Optional[str] = ""
+
+class CompanyUpdate(BaseModel):
+    name: Optional[str] = None
+    code: Optional[str] = None
+    active: Optional[bool] = None
+
+class ProductCreate(BaseModel):
+    name: str
+    code: Optional[str] = ""
+    company_id: str
+    escalation_user_ids: List[str] = []
+    active: bool = True
+
+class ProductUpdate(BaseModel):
+    name: Optional[str] = None
+    code: Optional[str] = None
+    company_id: Optional[str] = None
+    escalation_user_ids: Optional[List[str]] = None
+    active: Optional[bool] = None
+
 class RoleCreate(BaseModel):
     name: str
     description: str = ""
@@ -150,12 +275,14 @@ class RoleUpdate(BaseModel):
 class UserCreate(BaseModel):
     name: str; email: str; password: str
     role_id: str
+    company_id: Optional[str] = None
     phone: Optional[str] = ""
     skills: Optional[str] = ""
 
 class UserUpdateModel(BaseModel):
     name: Optional[str] = None
     role_id: Optional[str] = None
+    company_id: Optional[str] = None
     phone: Optional[str] = None
     skills: Optional[str] = None
     password: Optional[str] = None
@@ -163,8 +290,10 @@ class UserUpdateModel(BaseModel):
 
 class TicketCreate(BaseModel):
     title: str; description: str = ""; customer: str = ""
+    product_id: str
+    company_id: Optional[str] = None
     assigned_to: str = ""; priority: str = "medium"
-    type: str = "INSTALLATION"; budget: float = 0
+    type: str = "SOFTWARE_SUPPORT"
     due_date: str = ""; milestones: List[dict] = []
 
 class TicketUpdate(BaseModel):
@@ -179,7 +308,7 @@ class MessageCreate(BaseModel):
 # ══════════════════════════════════════════════════════════════════════════════
 @app.post("/api/auth/login")
 def login(req: LoginRequest, db: Session = Depends(get_db)):
-    user = db.query(User).options(joinedload(User.role_obj)).filter(User.email == req.email).first()
+    user = db.query(User).options(joinedload(User.role_obj), joinedload(User.company)).filter(User.email == req.email).first()
     if not user or not verify_password(req.password, user.hashed_password):
         raise HTTPException(401, "Invalid credentials")
     if not user.active:
@@ -192,8 +321,124 @@ def get_me(user: User = Depends(get_current_user)):
     return ser_user(user)
 
 # ══════════════════════════════════════════════════════════════════════════════
+# COMPANIES
+# ══════════════════════════════════════════════════════════════════════════════
+@app.get("/api/companies")
+def get_companies(user: User = Depends(require_perm("companies.manage")), db: Session = Depends(get_db)):
+    companies = db.query(Company).order_by(Company.name).all()
+    return [ser_company(c) for c in companies]
+
+@app.post("/api/companies")
+def create_company(payload: CompanyCreate, user: User = Depends(require_perm("companies.manage")), db: Session = Depends(get_db)):
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(400, "Company name is required")
+    code = (payload.code or name[:8]).strip().upper().replace(" ", "_")
+    if db.query(Company).filter(Company.name == name).first():
+        raise HTTPException(409, "Company name already exists")
+    if db.query(Company).filter(Company.code == code).first():
+        raise HTTPException(409, "Company code already exists")
+    company = Company(id=f"co_{uuid.uuid4().hex[:8]}", name=name, code=code,
+                      active=True, created_at=datetime.utcnow())
+    db.add(company)
+    db.commit()
+    db.refresh(company)
+    return ser_company(company)
+
+@app.patch("/api/companies/{company_id}")
+def update_company(company_id: str, payload: CompanyUpdate, user: User = Depends(require_perm("companies.manage")), db: Session = Depends(get_db)):
+    company = db.query(Company).filter(Company.id == company_id).first()
+    if not company:
+        raise HTTPException(404, "Company not found")
+    if payload.name is not None:
+        name = payload.name.strip()
+        if not name:
+            raise HTTPException(400, "Company name is required")
+        if db.query(Company).filter(Company.name == name, Company.id != company_id).first():
+            raise HTTPException(409, "Company name already exists")
+        company.name = name
+    if payload.code is not None:
+        code = payload.code.strip().upper().replace(" ", "_")
+        if not code:
+            raise HTTPException(400, "Company code is required")
+        if db.query(Company).filter(Company.code == code, Company.id != company_id).first():
+            raise HTTPException(409, "Company code already exists")
+        company.code = code
+    if payload.active is not None:
+        company.active = payload.active
+    company.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(company)
+    return ser_company(company)
+
+# ══════════════════════════════════════════════════════════════════════════════
 # ROLES
 # ══════════════════════════════════════════════════════════════════════════════
+# PRODUCTS
+@app.get("/api/products")
+def get_products(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if not user.can("products.view") and not user.can("products.manage"):
+        raise HTTPException(403, "Permission required: products.view")
+    products = scoped_products_query(db, user, active_only=not is_super_admin(user)).order_by(Product.name).all()
+    return [ser_product(p, db) for p in products]
+
+@app.post("/api/products")
+def create_product(payload: ProductCreate, user: User = Depends(require_perm("products.manage")), db: Session = Depends(get_db)):
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(400, "Product name is required")
+    company = db.query(Company).filter(Company.id == payload.company_id, Company.active == True).first()
+    if not company:
+        raise HTTPException(400, "Valid company is required")
+    code = (payload.code or name[:8]).strip().upper().replace(" ", "_")
+    if db.query(Product).filter(Product.company_id == company.id, Product.name == name).first():
+        raise HTTPException(409, "Product name already exists for this company")
+    if code and db.query(Product).filter(Product.company_id == company.id, Product.code == code).first():
+        raise HTTPException(409, "Product code already exists for this company")
+    escalation_ids = validate_escalation_users(db, company.id, payload.escalation_user_ids)
+    product = Product(id=f"prod_{uuid.uuid4().hex[:8]}", name=name, code=code,
+                      company_id=company.id, escalation_user_ids=escalation_ids,
+                      active=payload.active, created_at=datetime.utcnow(),
+                      updated_at=datetime.utcnow())
+    db.add(product)
+    db.commit()
+    db.refresh(product)
+    saved = db.query(Product).options(joinedload(Product.company)).filter(Product.id == product.id).first()
+    return ser_product(saved, db)
+
+@app.patch("/api/products/{product_id}")
+def update_product(product_id: str, payload: ProductUpdate, user: User = Depends(require_perm("products.manage")), db: Session = Depends(get_db)):
+    product = db.query(Product).options(joinedload(Product.company)).filter(Product.id == product_id).first()
+    if not product:
+        raise HTTPException(404, "Product not found")
+    company_id = payload.company_id if payload.company_id is not None else product.company_id
+    company = db.query(Company).filter(Company.id == company_id, Company.active == True).first()
+    if not company:
+        raise HTTPException(400, "Valid company is required")
+    if payload.name is not None:
+        name = payload.name.strip()
+        if not name:
+            raise HTTPException(400, "Product name is required")
+        if db.query(Product).filter(Product.company_id == company_id, Product.name == name, Product.id != product_id).first():
+            raise HTTPException(409, "Product name already exists for this company")
+        product.name = name
+    if payload.code is not None:
+        code = payload.code.strip().upper().replace(" ", "_")
+        if code and db.query(Product).filter(Product.company_id == company_id, Product.code == code, Product.id != product_id).first():
+            raise HTTPException(409, "Product code already exists for this company")
+        product.code = code
+    if payload.company_id is not None:
+        product.company_id = company_id
+    if payload.escalation_user_ids is not None:
+        product.escalation_user_ids = validate_escalation_users(db, company_id, payload.escalation_user_ids)
+    if payload.active is not None:
+        product.active = payload.active
+    product.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(product)
+    saved = db.query(Product).options(joinedload(Product.company)).filter(Product.id == product.id).first()
+    return ser_product(saved, db)
+
 @app.get("/api/permissions")
 def get_all_permissions(user: User = Depends(require_perm("roles.view"))):
     return {"permissions": ALL_PERMISSIONS, "groups": PERMISSION_GROUPS}
@@ -201,13 +446,13 @@ def get_all_permissions(user: User = Depends(require_perm("roles.view"))):
 @app.get("/api/roles")
 def get_roles(user: User = Depends(require_perm("roles.view")), db: Session = Depends(get_db)):
     roles = db.query(Role).options(joinedload(Role.users)).order_by(Role.created_at).all()
-    return [ser_role(r) for r in roles]
+    return [ser_role(r, user) for r in roles]
 
 @app.get("/api/roles/{role_id}")
 def get_role(role_id: str, user: User = Depends(require_perm("roles.view")), db: Session = Depends(get_db)):
     r = db.query(Role).options(joinedload(Role.users)).filter(Role.id == role_id).first()
     if not r: raise HTTPException(404, "Role not found")
-    return ser_role(r)
+    return ser_role(r, user)
 
 @app.post("/api/roles")
 def create_role(payload: RoleCreate, user: User = Depends(require_perm("roles.manage")), db: Session = Depends(get_db)):
@@ -222,7 +467,7 @@ def create_role(payload: RoleCreate, user: User = Depends(require_perm("roles.ma
     db.add(r)
     db.commit()
     db.refresh(r)
-    return ser_role(r)
+    return ser_role(r, user)
 
 @app.patch("/api/roles/{role_id}")
 def update_role(role_id: str, payload: RoleUpdate, user: User = Depends(require_perm("roles.manage")), db: Session = Depends(get_db)):
@@ -246,7 +491,7 @@ def update_role(role_id: str, payload: RoleUpdate, user: User = Depends(require_
     r.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(r)
-    return ser_role(r)
+    return ser_role(r, user)
 
 @app.delete("/api/roles/{role_id}")
 def delete_role(role_id: str, user: User = Depends(require_perm("roles.manage")), db: Session = Depends(get_db)):
@@ -263,18 +508,24 @@ def delete_role(role_id: str, user: User = Depends(require_perm("roles.manage"))
 # ══════════════════════════════════════════════════════════════════════════════
 @app.get("/api/users")
 def get_users(user: User = Depends(require_perm("users.view")), db: Session = Depends(get_db)):
-    users = db.query(User).options(joinedload(User.role_obj)).order_by(User.created_at).all()
+    users = scoped_users_query(db, user).order_by(User.created_at).all()
     return [ser_user(u) for u in users]
 
 @app.get("/api/users/assignable")
-def get_assignable(user: User = Depends(require_perm("tickets.assign")), db: Session = Depends(get_db)):
+def get_assignable(company_id: Optional[str] = Query(None), user: User = Depends(require_perm("tickets.assign")), db: Session = Depends(get_db)):
     """Users who can be assigned tickets (have tickets.edit_assigned permission)"""
-    all_users = db.query(User).options(joinedload(User.role_obj)).filter(User.active == True).all()
+    q = db.query(User).options(joinedload(User.role_obj), joinedload(User.company)).filter(User.active == True)
+    if is_super_admin(user):
+        if company_id:
+            q = q.filter(User.company_id == company_id)
+    else:
+        q = q.filter(User.company_id == user.company_id)
+    all_users = q.all()
     return [ser_user(u) for u in all_users if "tickets.edit_assigned" in (u.permissions or [])]
 
 @app.get("/api/users/{user_id}")
 def get_user(user_id: str, user: User = Depends(require_perm("users.view")), db: Session = Depends(get_db)):
-    u = db.query(User).options(joinedload(User.role_obj)).filter(User.id == user_id).first()
+    u = scoped_users_query(db, user).filter(User.id == user_id).first()
     if not u: raise HTTPException(404, "User not found")
     return ser_user(u)
 
@@ -282,12 +533,24 @@ def get_user(user_id: str, user: User = Depends(require_perm("users.view")), db:
 def create_user(payload: UserCreate, admin: User = Depends(require_perm("users.create")), db: Session = Depends(get_db)):
     if db.query(User).filter(User.email == payload.email).first():
         raise HTTPException(409, "Email already exists")
-    if not db.query(Role).filter(Role.id == payload.role_id).first():
+    role = db.query(Role).filter(Role.id == payload.role_id).first()
+    if not role:
         raise HTTPException(400, "Invalid role_id")
     if len(payload.password) < 6:
         raise HTTPException(400, "Password must be at least 6 characters")
+    company_id = payload.company_id if is_super_admin(admin) else admin.company_id
+    if role_is_customer_limited(role) and not company_id:
+        raise HTTPException(400, "Company is required for this role")
+    if company_id:
+        company = db.query(Company).filter(Company.id == company_id, Company.active == True).first()
+        if not company:
+            raise HTTPException(400, "Invalid company_id")
+    if not is_super_admin(admin) and payload.company_id and payload.company_id != admin.company_id:
+        raise HTTPException(403, "Cannot create users for another company")
+    if not is_super_admin(admin) and not role_is_customer_limited(role):
+        raise HTTPException(403, "Cannot create Super Admin users")
     u = User(id=f"u{uuid.uuid4().hex[:8]}", email=payload.email, name=payload.name,
-             role_id=payload.role_id, phone=payload.phone or "", skills=payload.skills or "",
+             role_id=payload.role_id, company_id=company_id, phone=payload.phone or "", skills=payload.skills or "",
              avatar=payload.name[0].upper(), active=True,
              hashed_password=hash_password(payload.password),
              created_by=admin.id, created_at=datetime.utcnow())
@@ -298,16 +561,29 @@ def create_user(payload: UserCreate, admin: User = Depends(require_perm("users.c
 
 @app.patch("/api/users/{user_id}")
 def update_user(user_id: str, payload: UserUpdateModel, admin: User = Depends(require_perm("users.edit")), db: Session = Depends(get_db)):
-    u = db.query(User).filter(User.id == user_id).first()
+    u = scoped_users_query(db, admin).filter(User.id == user_id).first()
     if not u: raise HTTPException(404, "User not found")
     if u.id == admin.id and payload.role_id and payload.role_id != admin.role_id:
         raise HTTPException(400, "Cannot change your own role")
     if payload.name is not None:
         u.name = payload.name; u.avatar = payload.name[0].upper()
     if payload.role_id is not None:
-        if not db.query(Role).filter(Role.id == payload.role_id).first():
+        role = db.query(Role).filter(Role.id == payload.role_id).first()
+        if not role:
             raise HTTPException(400, "Invalid role_id")
+        if not is_super_admin(admin) and not role_is_customer_limited(role):
+            raise HTTPException(403, "Cannot assign Super Admin role")
         u.role_id = payload.role_id
+    if payload.company_id is not None:
+        if not is_super_admin(admin):
+            raise HTTPException(403, "Cannot move users between companies")
+        if u.id == admin.id:
+            raise HTTPException(400, "Cannot change your own company")
+        if payload.company_id:
+            company = db.query(Company).filter(Company.id == payload.company_id, Company.active == True).first()
+            if not company:
+                raise HTTPException(400, "Invalid company_id")
+        u.company_id = payload.company_id
     if payload.phone is not None: u.phone = payload.phone
     if payload.skills is not None: u.skills = payload.skills
     if payload.active is not None: u.active = payload.active
@@ -321,7 +597,7 @@ def update_user(user_id: str, payload: UserUpdateModel, admin: User = Depends(re
 @app.delete("/api/users/{user_id}")
 def delete_user(user_id: str, admin: User = Depends(require_perm("users.delete")), db: Session = Depends(get_db)):
     if user_id == admin.id: raise HTTPException(400, "Cannot delete your own account")
-    u = db.query(User).filter(User.id == user_id).first()
+    u = scoped_users_query(db, admin).filter(User.id == user_id).first()
     if not u: raise HTTPException(404, "User not found")
     db.delete(u)
     db.commit()
@@ -332,40 +608,55 @@ def delete_user(user_id: str, admin: User = Depends(require_perm("users.delete")
 # ══════════════════════════════════════════════════════════════════════════════
 @app.get("/api/tickets")
 def get_tickets(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    q = db.query(Ticket)
-    if not user.can("tickets.view_all"):
-        q = q.filter(Ticket.assigned_to == user.id)
+    q = scoped_tickets_query(db, user)
     return [ser_ticket(t) for t in q.order_by(Ticket.created_at.desc()).all()]
 
 @app.get("/api/tickets/{ticket_id}")
 def get_ticket(ticket_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    t = db.query(Ticket).filter(Ticket.id == ticket_id).first()
+    t = db.query(Ticket).options(joinedload(Ticket.company), joinedload(Ticket.product)).filter(Ticket.id == ticket_id).first()
     if not t: raise HTTPException(404, "Ticket not found")
-    if not user.can("tickets.view_all") and t.assigned_to != user.id:
-        raise HTTPException(403, "Access denied")
+    require_ticket_access(t, user)
     return ser_ticket(t)
 
 @app.post("/api/tickets")
 def create_ticket(payload: TicketCreate, user: User = Depends(require_perm("tickets.create")), db: Session = Depends(get_db)):
+    title = payload.title.strip()
+    if not title:
+        raise HTTPException(400, "Ticket title is required")
+    product = db.query(Product).options(joinedload(Product.company)).filter(Product.id == payload.product_id, Product.active == True).first()
+    if not product:
+        raise HTTPException(400, "Valid product is required")
+    if not is_super_admin(user) and product.company_id != user.company_id:
+        raise HTTPException(403, "Cannot create tickets for another company")
+    if payload.company_id and payload.company_id != product.company_id:
+        raise HTTPException(400, "Selected company does not match product company")
+    company = product.company
+    if not company or not company.active:
+        raise HTTPException(400, "Product company is inactive")
+    assigned_to = resolve_product_assignee(db, product)
     count = db.query(Ticket).count()
     tid = f"T-{str(count + 1).zfill(3)}"
     while db.query(Ticket).filter(Ticket.id == tid).first():
         count += 1; tid = f"T-{str(count + 1).zfill(3)}"
-    t = Ticket(id=tid, title=payload.title, description=payload.description,
-               customer=payload.customer, assigned_to=payload.assigned_to or None,
-               priority=payload.priority, type=payload.type, budget=payload.budget,
+    t = Ticket(id=tid, title=title, description=payload.description,
+               customer=company.name, company_id=product.company_id, product_id=product.id,
+               assigned_to=assigned_to,
+               priority=payload.priority, type=payload.type,
                due_date=payload.due_date, milestones=payload.milestones,
                status="open", progress=0, created_by=user.id,
                created_at=datetime.utcnow(), updated_at=datetime.utcnow())
     db.add(t)
     db.commit()
     db.refresh(t)
-    return ser_ticket(t)
+    saved = db.query(Ticket).options(joinedload(Ticket.company), joinedload(Ticket.product)).filter(Ticket.id == t.id).first()
+    return ser_ticket(saved)
 
 @app.patch("/api/tickets/{ticket_id}")
 def update_ticket(ticket_id: str, payload: TicketUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    t = db.query(Ticket).filter(Ticket.id == ticket_id).first()
+    t = db.query(Ticket).options(joinedload(Ticket.company), joinedload(Ticket.product)).filter(Ticket.id == ticket_id).first()
     if not t: raise HTTPException(404, "Ticket not found")
+    if not is_super_admin(user) and t.company_id != user.company_id:
+        raise HTTPException(403, "Access denied")
     can_edit_any = user.can("tickets.edit_any")
     can_edit_own = user.can("tickets.edit_assigned") and t.assigned_to == user.id
     if not can_edit_any and not can_edit_own:
@@ -386,6 +677,8 @@ def update_ticket(ticket_id: str, payload: TicketUpdate, user: User = Depends(ge
 def delete_ticket(ticket_id: str, user: User = Depends(require_perm("tickets.delete")), db: Session = Depends(get_db)):
     t = db.query(Ticket).filter(Ticket.id == ticket_id).first()
     if not t: raise HTTPException(404, "Ticket not found")
+    if not is_super_admin(user) and t.company_id != user.company_id:
+        raise HTTPException(403, "Access denied")
     db.delete(t)
     db.commit()
     return {"message": "Deleted"}
@@ -397,16 +690,14 @@ def delete_ticket(ticket_id: str, user: User = Depends(require_perm("tickets.del
 def get_messages(ticket_id: str, user: User = Depends(require_perm("messages.view")), db: Session = Depends(get_db)):
     t = db.query(Ticket).filter(Ticket.id == ticket_id).first()
     if not t: raise HTTPException(404, "Ticket not found")
-    if not user.can("tickets.view_all") and t.assigned_to != user.id:
-        raise HTTPException(403, "Access denied")
+    require_ticket_access(t, user)
     return [ser_message(m) for m in db.query(Message).filter(Message.ticket_id == ticket_id).order_by(Message.timestamp).all()]
 
 @app.post("/api/tickets/{ticket_id}/messages")
 def post_message(ticket_id: str, payload: MessageCreate, user: User = Depends(require_perm("messages.send")), db: Session = Depends(get_db)):
     t = db.query(Ticket).filter(Ticket.id == ticket_id).first()
     if not t: raise HTTPException(404, "Ticket not found")
-    if not user.can("tickets.view_all") and t.assigned_to != user.id:
-        raise HTTPException(403, "Access denied")
+    require_ticket_access(t, user)
     m = Message(id=str(uuid.uuid4()), ticket_id=ticket_id, user_id=user.id,
                 user_name=user.name, role=user.role_obj.name if user.role_obj else "",
                 content=payload.content, type=payload.type,
@@ -427,8 +718,7 @@ async def upload_signoff(ticket_id: str, file: UploadFile = File(...),
                           db: Session = Depends(get_db)):
     t = db.query(Ticket).filter(Ticket.id == ticket_id).first()
     if not t: raise HTTPException(404, "Ticket not found")
-    if not user.can("tickets.view_all") and t.assigned_to != user.id:
-        raise HTTPException(403, "Access denied")
+    require_ticket_access(t, user)
     fid = str(uuid.uuid4())
     ext = os.path.splitext(file.filename)[1]
     path = f"uploads/{fid}{ext}"
@@ -453,8 +743,7 @@ async def upload_signoff(ticket_id: str, file: UploadFile = File(...),
 def get_signoffs(ticket_id: str, user: User = Depends(require_perm("messages.view")), db: Session = Depends(get_db)):
     t = db.query(Ticket).filter(Ticket.id == ticket_id).first()
     if not t: raise HTTPException(404, "Ticket not found")
-    if not user.can("tickets.view_all") and t.assigned_to != user.id:
-        raise HTTPException(403, "Access denied")
+    require_ticket_access(t, user)
     return [ser_signoff(s) for s in db.query(Signoff).filter(Signoff.ticket_id == ticket_id).all()]
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -462,9 +751,7 @@ def get_signoffs(ticket_id: str, user: User = Depends(require_perm("messages.vie
 # ══════════════════════════════════════════════════════════════════════════════
 @app.get("/api/dashboard/stats")
 def get_stats(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    q = db.query(Ticket)
-    if not user.can("dashboard.view_all"):
-        q = q.filter(Ticket.assigned_to == user.id)
+    q = scoped_tickets_query(db, user)
     tickets = q.all()
     return {
         "total": len(tickets),

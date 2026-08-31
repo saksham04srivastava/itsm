@@ -5,6 +5,11 @@ from database import Base
 
 # ─── All available permissions in the system ─────────────────────────────────
 ALL_PERMISSIONS = [
+    # Companies
+    "companies.manage",       # create and manage customer companies
+    # Products
+    "products.view",          # view customer products for ticket creation
+    "products.manage",        # create and manage products and escalation matrix
     # Tickets
     "tickets.view_all",       # see every ticket (not just assigned)
     "tickets.create",         # create new tickets
@@ -31,6 +36,8 @@ ALL_PERMISSIONS = [
 ]
 
 PERMISSION_GROUPS = {
+    "Companies": ["companies.manage"],
+    "Products":  ["products.view","products.manage"],
     "Tickets":   ["tickets.view_all","tickets.create","tickets.edit_any","tickets.edit_assigned","tickets.delete","tickets.assign"],
     "Chat":      ["messages.view","messages.send"],
     "Signoffs":  ["signoffs.upload","signoffs.view_all"],
@@ -38,6 +45,21 @@ PERMISSION_GROUPS = {
     "Roles":     ["roles.view","roles.manage"],
     "Dashboard": ["dashboard.view_all"],
 }
+
+
+class Company(Base):
+    __tablename__ = "companies"
+
+    id          = Column(String, primary_key=True)
+    name        = Column(String, unique=True, nullable=False)
+    code        = Column(String, unique=True, nullable=False)
+    active      = Column(Boolean, default=True)
+    created_at  = Column(DateTime, default=datetime.utcnow)
+    updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    users       = relationship("User", back_populates="company")
+    products    = relationship("Product", back_populates="company")
+    tickets     = relationship("Ticket", back_populates="company")
 
 
 class Role(Base):
@@ -62,6 +84,7 @@ class User(Base):
     email       = Column(String, unique=True, nullable=False, index=True)
     name        = Column(String, nullable=False)
     role_id     = Column(String, ForeignKey("roles.id"), nullable=True)
+    company_id  = Column(String, ForeignKey("companies.id"), nullable=True, index=True)
     phone       = Column(String, default="")
     skills      = Column(String, default="")
     avatar      = Column(String, default="")
@@ -72,6 +95,7 @@ class User(Base):
     created_by  = Column(String, nullable=True)
 
     role_obj         = relationship("Role", back_populates="users", foreign_keys=[role_id])
+    company          = relationship("Company", back_populates="users", foreign_keys=[company_id])
     tickets_assigned = relationship("Ticket", back_populates="assignee", foreign_keys="Ticket.assigned_to")
     messages         = relationship("Message", back_populates="author")
 
@@ -83,6 +107,22 @@ class User(Base):
         return perm in self.permissions
 
 
+class Product(Base):
+    __tablename__ = "products"
+
+    id                  = Column(String, primary_key=True)
+    name                = Column(String, nullable=False)
+    code                = Column(String, default="")
+    company_id          = Column(String, ForeignKey("companies.id"), nullable=False, index=True)
+    escalation_user_ids = Column(JSON, default=list)
+    active              = Column(Boolean, default=True)
+    created_at          = Column(DateTime, default=datetime.utcnow)
+    updated_at          = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    company = relationship("Company", back_populates="products", foreign_keys=[company_id])
+    tickets = relationship("Ticket", back_populates="product")
+
+
 class Ticket(Base):
     __tablename__ = "tickets"
 
@@ -90,10 +130,12 @@ class Ticket(Base):
     title       = Column(String, nullable=False)
     description = Column(Text, default="")
     customer    = Column(String, default="")
+    company_id  = Column(String, ForeignKey("companies.id"), nullable=True, index=True)
+    product_id  = Column(String, ForeignKey("products.id"), nullable=True, index=True)
     assigned_to = Column(String, ForeignKey("users.id"), nullable=True)
     status      = Column(String, default="open")
     priority    = Column(String, default="medium")
-    type        = Column(String, default="INSTALLATION")
+    type        = Column(String, default="SOFTWARE_SUPPORT")
     budget      = Column(Float, default=0)
     progress    = Column(Integer, default=0)
     due_date    = Column(String, default="")
@@ -103,6 +145,8 @@ class Ticket(Base):
     updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     assignee    = relationship("User", back_populates="tickets_assigned", foreign_keys=[assigned_to])
+    company     = relationship("Company", back_populates="tickets", foreign_keys=[company_id])
+    product     = relationship("Product", back_populates="tickets", foreign_keys=[product_id])
     messages    = relationship("Message", back_populates="ticket", cascade="all, delete-orphan")
     signoffs    = relationship("Signoff", back_populates="ticket", cascade="all, delete-orphan")
 
