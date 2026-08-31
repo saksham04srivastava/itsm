@@ -14,7 +14,7 @@ def run(db_conn):
             id                  VARCHAR PRIMARY KEY,
             name                VARCHAR NOT NULL,
             code                VARCHAR DEFAULT '',
-            company_id          VARCHAR NOT NULL,
+            company_id          VARCHAR,
             escalation_user_ids JSON DEFAULT '[]',
             active              BOOLEAN DEFAULT TRUE,
             created_at          TIMESTAMP DEFAULT NOW(),
@@ -99,6 +99,12 @@ def run(db_conn):
     if not result.fetchone():
         db_conn.execute(text("ALTER TABLE tickets ADD COLUMN product_id VARCHAR"))
         print("  Added tickets.product_id column")
+
+    try:
+        db_conn.execute(text("ALTER TABLE products ALTER COLUMN company_id DROP NOT NULL"))
+        print("  products.company_id is nullable for global products")
+    except Exception as e:
+        print(f"  products.company_id nullable check skipped (non-fatal): {e}")
 
     # ── Migration 3: Insert default system roles if not present ───────────────
     import json
@@ -207,19 +213,24 @@ def run(db_conn):
     """))
     db_conn.execute(text("""
         INSERT INTO products (id, name, code, company_id, escalation_user_ids, active, created_at)
-        VALUES ('prod_acme_crm', 'CRM Portal', 'CRM', 'co_acme', :acme_matrix, TRUE, NOW())
+        VALUES ('prod_acme_crm', 'CRM Portal', 'CRM', NULL, :acme_matrix, TRUE, NOW())
         ON CONFLICT (id) DO NOTHING
     """), {"acme_matrix": json.dumps(["u2"])})
     db_conn.execute(text("""
         INSERT INTO products (id, name, code, company_id, escalation_user_ids, active, created_at)
-        VALUES ('prod_beta_sales', 'Sales Dashboard', 'SALES_DASH', 'co_beta', :beta_matrix, TRUE, NOW())
+        VALUES ('prod_beta_sales', 'Sales Dashboard', 'SALES_DASH', NULL, :beta_matrix, TRUE, NOW())
         ON CONFLICT (id) DO NOTHING
     """), {"beta_matrix": json.dumps(["u3"])})
     db_conn.execute(text("""
         INSERT INTO products (id, name, code, company_id, escalation_user_ids, active, created_at)
-        VALUES ('prod_acme_finance', 'Finance Module', 'FINANCE', 'co_acme', :finance_matrix, TRUE, NOW())
+        VALUES ('prod_acme_finance', 'Finance Module', 'FINANCE', NULL, :finance_matrix, TRUE, NOW())
         ON CONFLICT (id) DO NOTHING
     """), {"finance_matrix": json.dumps(["u2"])})
+    db_conn.execute(text("""
+        UPDATE products
+        SET company_id = NULL
+        WHERE id IN ('prod_acme_crm', 'prod_beta_sales', 'prod_acme_finance')
+    """))
 
     db_conn.execute(text("""
         UPDATE tickets

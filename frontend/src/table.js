@@ -121,6 +121,8 @@ export function EnterpriseTable({
     setPage(1);
   };
 
+  const filterByKey = useMemo(() => Object.fromEntries(filters.map((f) => [f.key, f])), [filters]);
+
   const doExport = async (kind) => {
     const ok = await confirm({
       title: kind === "csv" ? `Export ${title} CSV` : `Export ${title} PDF`,
@@ -142,17 +144,7 @@ export function EnterpriseTable({
             placeholder: searchPlaceholder,
             onChange: (e) => { setQuery(e.target.value); setPage(1); },
           })
-        ),
-        filters.map((filter) => h("select", {
-          key: filter.key,
-          className: "select table-filter",
-          value: filterValues[filter.key] || "",
-          onChange: (e) => changeFilter(filter.key, e.target.value),
-          title: filter.label,
-        },
-          h("option", { value: "" }, filter.label),
-          filter.options.map((option) => h("option", { key: option.value, value: option.value }, option.label))
-        ))
+        )
       ),
       h("div", { className: "table-tools-right" },
         h("button", { className: "btn btn-outline btn-sm", onClick: () => doExport("csv") }, "CSV"),
@@ -161,7 +153,26 @@ export function EnterpriseTable({
     ),
     h("div", { className: "table-scroller" },
       h("table", { className: "data-table" },
-        h("thead", null, h("tr", null, columns.map((col) => h("th", { key: col.id || col.header }, col.header)))),
+        h("thead", null, h("tr", null, columns.map((col) => {
+          const filter = filterByKey[col.id || col.accessor];
+          return h("th", { key: col.id || col.header },
+            h("div", { className: "th-head" },
+              h("span", { className: "th-label" }, col.header),
+              filter && h("span", { className: `th-filter-wrap${filterValues[filter.key] ? " active" : ""}` },
+                h("span", { className: "th-filter-arrow" }, "▾"),
+                h("select", {
+                  className: "table-filter",
+                  value: filterValues[filter.key] || "",
+                  onChange: (e) => changeFilter(filter.key, e.target.value),
+                  title: filter.label,
+                },
+                  h("option", { value: "" }, filter.label),
+                  filter.options.map((option) => h("option", { key: option.value, value: option.value }, option.label))
+                )
+              )
+            )
+          );
+        }))),
         h("tbody", null,
           pageRows.length === 0
             ? h("tr", null, h("td", { colSpan: columns.length }, h("div", { className: "table-empty" }, emptyText)))

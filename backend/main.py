@@ -97,9 +97,7 @@ def scoped_tickets_query(db: Session, user: User):
     return q
 
 def scoped_products_query(db: Session, user: User, active_only: bool = False):
-    q = db.query(Product).options(joinedload(Product.company))
-    if not is_super_admin(user):
-        q = q.filter(Product.company_id == user.company_id)
+    q = db.query(Product)
     if active_only:
         q = q.filter(Product.active == True)
     return q
@@ -119,7 +117,7 @@ def role_is_customer_limited(role: Role) -> bool:
     perms = set(role.permissions or [])
     return "companies.manage" not in perms
 
-def validate_escalation_users(db: Session, company_id: str, user_ids: List[str]) -> List[str]:
+def validate_escalation_users(db: Session, user_ids: List[str]) -> List[str]:
     ordered_ids = list(dict.fromkeys([uid for uid in user_ids if uid]))
     if not ordered_ids:
         raise HTTPException(400, "At least one escalation person is required")
@@ -132,8 +130,6 @@ def validate_escalation_users(db: Session, company_id: str, user_ids: List[str])
         escalation_user = by_id[uid]
         if not escalation_user.active:
             raise HTTPException(400, f"{escalation_user.name} is inactive")
-        if escalation_user.company_id != company_id:
-            raise HTTPException(400, "Escalation people must belong to the selected company")
         if "tickets.edit_assigned" not in (escalation_user.permissions or []):
             raise HTTPException(400, f"{escalation_user.name} cannot own assigned tickets")
     return ordered_ids
@@ -141,8 +137,7 @@ def validate_escalation_users(db: Session, company_id: str, user_ids: List[str])
 def resolve_product_assignee(db: Session, product: Product) -> str:
     for user_id in product.escalation_user_ids or []:
         escalation_user = db.query(User).options(joinedload(User.role_obj)).filter(User.id == user_id, User.active == True).first()
-        if (escalation_user and escalation_user.company_id == product.company_id
-                and "tickets.edit_assigned" in (escalation_user.permissions or [])):
+        if escalation_user and "tickets.edit_assigned" in (escalation_user.permissions or []):
             return escalation_user.id
     raise HTTPException(400, "Selected product has no active escalation owner")
 
@@ -211,7 +206,7 @@ def ser_product(p: Product, db: Optional[Session] = None) -> dict:
     return {
         "id": p.id, "name": p.name, "code": p.code or "",
         "company_id": p.company_id,
-        "company_name": p.company.name if p.company else "",
+        "company_name": "",
         "escalation_user_ids": escalation_ids,
         "escalation_people": people,
         "active": True if p.active is None else p.active,
@@ -268,14 +263,12 @@ class CompanyUpdate(BaseModel):
 class ProductCreate(BaseModel):
     name: str
     code: Optional[str] = ""
-    company_id: str
     escalation_user_ids: List[str] = []
     active: bool = True
 
 class ProductUpdate(BaseModel):
     name: Optional[str] = None
     code: Optional[str] = None
-    company_id: Optional[str] = None
     escalation_user_ids: Optional[List[str]] = None
     active: Optional[bool] = None
 
@@ -406,56 +399,47 @@ def create_product(payload: ProductCreate, user: User = Depends(require_perm("pr
     name = payload.name.strip()
     if not name:
         raise HTTPException(400, "Product name is required")
-    company = db.query(Company).filter(Company.id == payload.company_id, Company.active == True).first()
-    if not company:
-        raise HTTPException(400, "Valid company is required")
     code = (payload.code or name[:8]).strip().upper().replace(" ", "_")
-    if db.query(Product).filter(Product.company_id == company.id, Product.name == name).first():
-        raise HTTPException(409, "Product name already exists for this company")
-    if code and db.query(Product).filter(Product.company_id == company.id, Product.code == code).first():
-        raise HTTPException(409, "Product code already exists for this company")
-    escalation_ids = validate_escalation_users(db, company.id, payload.escalation_user_ids)
+    if db.query(Product).filter(Product.name == name).first():
+        raise HTTPException(409, "Product name already exists")
+    if code and db.query(Product).filter(Product.code == code).first():
+        raise HTTPException(409, "Product code already exists")
+    escalation_ids = validate_escalation_users(db, payload.escalation_user_ids)
     product = Product(id=f"prod_{uuid.uuid4().hex[:8]}", name=name, code=code,
-                      company_id=company.id, escalation_user_ids=escalation_ids,
+                      company_id=None, escalation_user_ids=escalation_ids,
                       active=payload.active, created_at=datetime.utcnow(),
                       updated_at=datetime.utcnow())
     db.add(product)
     db.commit()
     db.refresh(product)
-    saved = db.query(Product).options(joinedload(Product.company)).filter(Product.id == product.id).first()
+    saved = db.query(Product).filter(Product.id == product.id).first()
     return ser_product(saved, db)
 
 @app.patch("/api/products/{product_id}")
 def update_product(product_id: str, payload: ProductUpdate, user: User = Depends(require_perm("products.manage")), db: Session = Depends(get_db)):
-    product = db.query(Product).options(joinedload(Product.company)).filter(Product.id == product_id).first()
+    product = db.query(Product).filter(Product.id == product_id).first()
     if not product:
         raise HTTPException(404, "Product not found")
-    company_id = payload.company_id if payload.company_id is not None else product.company_id
-    company = db.query(Company).filter(Company.id == company_id, Company.active == True).first()
-    if not company:
-        raise HTTPException(400, "Valid company is required")
     if payload.name is not None:
         name = payload.name.strip()
         if not name:
             raise HTTPException(400, "Product name is required")
-        if db.query(Product).filter(Product.company_id == company_id, Product.name == name, Product.id != product_id).first():
-            raise HTTPException(409, "Product name already exists for this company")
+        if db.query(Product).filter(Product.name == name, Product.id != product_id).first():
+            raise HTTPException(409, "Product name already exists")
         product.name = name
     if payload.code is not None:
         code = payload.code.strip().upper().replace(" ", "_")
-        if code and db.query(Product).filter(Product.company_id == company_id, Product.code == code, Product.id != product_id).first():
-            raise HTTPException(409, "Product code already exists for this company")
+        if code and db.query(Product).filter(Product.code == code, Product.id != product_id).first():
+            raise HTTPException(409, "Product code already exists")
         product.code = code
-    if payload.company_id is not None:
-        product.company_id = company_id
     if payload.escalation_user_ids is not None:
-        product.escalation_user_ids = validate_escalation_users(db, company_id, payload.escalation_user_ids)
+        product.escalation_user_ids = validate_escalation_users(db, payload.escalation_user_ids)
     if payload.active is not None:
         product.active = payload.active
     product.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(product)
-    saved = db.query(Product).options(joinedload(Product.company)).filter(Product.id == product.id).first()
+    saved = db.query(Product).filter(Product.id == product.id).first()
     return ser_product(saved, db)
 
 @app.get("/api/permissions")
@@ -642,21 +626,22 @@ def create_ticket(payload: TicketCreate, user: User = Depends(require_perm("tick
     title = payload.title.strip()
     if not title:
         raise HTTPException(400, "Ticket title is required")
-    product = db.query(Product).options(joinedload(Product.company)).filter(Product.id == payload.product_id, Product.active == True).first()
+    product = db.query(Product).filter(Product.id == payload.product_id, Product.active == True).first()
     if not product:
         raise HTTPException(400, "Valid product is required")
-    if not is_super_admin(user) and product.company_id != user.company_id:
+    company_id = payload.company_id if is_super_admin(user) and payload.company_id else user.company_id
+    if not company_id:
+        raise HTTPException(400, "Company is required for ticket creation")
+    if not is_super_admin(user) and payload.company_id and payload.company_id != user.company_id:
         raise HTTPException(403, "Cannot create tickets for another company")
-    if payload.company_id and payload.company_id != product.company_id:
-        raise HTTPException(400, "Selected company does not match product company")
-    company = product.company
+    company = db.query(Company).filter(Company.id == company_id, Company.active == True).first()
     if not company or not company.active:
-        raise HTTPException(400, "Product company is inactive")
+        raise HTTPException(400, "Invalid company_id")
     assigned_to = resolve_product_assignee(db, product)
     created_at = datetime.utcnow()
     tid = next_ticket_id(db, company, product, created_at)
     t = Ticket(id=tid, title=title, description=payload.description,
-               customer=company.name, company_id=product.company_id, product_id=product.id,
+               customer=company.name, company_id=company.id, product_id=product.id,
                assigned_to=assigned_to,
                priority=payload.priority, type=payload.type,
                due_date=payload.due_date, milestones=payload.milestones,

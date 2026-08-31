@@ -58,7 +58,6 @@ class Company(Base):
     updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     users       = relationship("User", back_populates="company")
-    products    = relationship("Product", back_populates="company")
     tickets     = relationship("Ticket", back_populates="company")
 
 
@@ -113,13 +112,12 @@ class Product(Base):
     id                  = Column(String, primary_key=True)
     name                = Column(String, nullable=False)
     code                = Column(String, default="")
-    company_id          = Column(String, ForeignKey("companies.id"), nullable=False, index=True)
+    company_id          = Column(String, nullable=True, index=True)
     escalation_user_ids = Column(JSON, default=list)
     active              = Column(Boolean, default=True)
     created_at          = Column(DateTime, default=datetime.utcnow)
     updated_at          = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    company = relationship("Company", back_populates="products", foreign_keys=[company_id])
     tickets = relationship("Ticket", back_populates="product")
 
 

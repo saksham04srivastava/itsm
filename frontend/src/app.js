@@ -2,6 +2,7 @@ import { api } from "./api.js";
 import { useAuth } from "./auth.js";
 import { useConfirm } from "./confirm.js";
 import { Badge, EnterpriseTable, Progress } from "./table.js";
+import { BarChartCard, TrendChart } from "./charts.js";
 import { h, useEffect, useMemo, useRef, useState } from "./react.js";
 
 const ticketTypes = ["SOFTWARE_SUPPORT", "BUG", "ACCESS_REQUEST", "CONFIGURATION", "MAINTENANCE"];
@@ -119,7 +120,7 @@ function Sidebar({ page, setPage }) {
   const items = [
     { id: "dashboard", icon: "DB", label: "Dashboard" },
     { id: "tickets", icon: "TK", label: "Tickets" },
-    ...(can(user, "companies.manage") ? [{ id: "companies", icon: "CO", label: "Companies" }] : []),
+    ...(can(user, "companies.manage") ? [{ id: "customers", icon: "CU", label: "Customers" }] : []),
     ...(can(user, "products.manage") ? [{ id: "products", icon: "PR", label: "Products" }] : []),
     ...(can(user, "signoffs.view_all") || can(user, "signoffs.upload") ? [{ id: "signoffs", icon: "SO", label: "Signoffs" }] : []),
     ...(can(user, "users.view") ? [{ id: "users", icon: "US", label: "Users" }] : []),
@@ -158,7 +159,7 @@ function Shell({ page, setPage, children }) {
     dashboard: "Dashboard",
     tickets: "Tickets",
     "ticket-detail": "Ticket Detail",
-    companies: "Companies",
+    customers: "Customers",
     products: "Products",
     signoffs: "Signoffs",
     users: "User Management",
@@ -194,7 +195,7 @@ function ticketColumns(extra = []) {
   return [
     { header: "Ticket ID", accessor: "id", cell: (t) => h("span", { className: "mono" }, t.id) },
     { header: "Title", accessor: "title", cell: TicketTitleCell },
-    { header: "Company", accessor: "company_name", cell: (t) => t.company_name || t.customer || "Not set" },
+    { header: "Customer", accessor: "company_name", cell: (t) => t.company_name || t.customer || "Not set" },
     { header: "Product", accessor: "product_name", cell: (t) => t.product_name || "Not set" },
     { header: "Type", accessor: "type", cell: (t) => h(Badge, { value: t.type, tone: "type" }) },
     { header: "Status", accessor: "status", cell: (t) => h(Badge, { value: t.status }) },
@@ -205,25 +206,195 @@ function ticketColumns(extra = []) {
   ];
 }
 
+const TIME_RANGES = [
+  { key: "7", label: "7 days", days: 7 },
+  { key: "30", label: "30 days", days: 30 },
+  { key: "90", label: "90 days", days: 90 },
+  { key: "all", label: "All time", days: null },
+];
+
+const STATUS_LABELS = { open: "Open", in_progress: "In Progress", completed: "Completed" };
+const STATUS_COLORS = { open: "#2a78d6", in_progress: "#eda100", completed: "#008300" };
+const PRIORITY_COLORS = { low: "#0ca30c", medium: "#fab219", high: "#ec835a", critical: "#d03b3b" };
+const CHART_ACCENT = "#2a78d6";
+const CHART_OTHER = "#94a3b8";
+
+function topByKey(rows, getter, limit = 6) {
+  const counts = new Map();
+  rows.forEach((row) => {
+    const key = getter(row) || "Not set";
+    counts.set(key, (counts.get(key) || 0) + 1);
+  });
+  const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  const top = sorted.slice(0, limit).map(([key, value]) => ({ key, label: key, value, color: CHART_ACCENT }));
+  const restTotal = sorted.slice(limit).reduce((sum, [, value]) => sum + value, 0);
+  if (restTotal > 0) top.push({ key: "__other__", label: "Other", value: restTotal, color: CHART_OTHER, disabled: true });
+  return top;
+}
+
+function buildTrend(rows, rangeKey) {
+  const now = new Date();
+  if (rangeKey === "7" || rangeKey === "30") {
+    const days = rangeKey === "7" ? 7 : 30;
+    const buckets = [];
+    for (let i = days - 1; i >= 0; i--) {
+      const d = new Date(now);
+      d.setDate(d.getDate() - i);
+      d.setHours(0, 0, 0, 0);
+      buckets.push({ key: d.toISOString().slice(0, 10), label: d.toLocaleDateString(undefined, { month: "short", day: "numeric" }), value: 0 });
+    }
+    const index = new Map(buckets.map((b, i) => [b.key, i]));
+    rows.forEach((t) => {
+      if (!t.created_at) return;
+      const i = index.get(t.created_at.slice(0, 10));
+      if (i != null) buckets[i].value++;
+    });
+    return buckets;
+  }
+  if (rangeKey === "90") {
+    const weeks = 13;
+    const buckets = [];
+    for (let i = weeks - 1; i >= 0; i--) {
+      const end = new Date(now);
+      end.setDate(end.getDate() - i * 7);
+      const start = new Date(end);
+      start.setDate(start.getDate() - 6);
+      buckets.push({ key: `w${i}`, start, end, label: start.toLocaleDateString(undefined, { month: "short", day: "numeric" }), value: 0 });
+    }
+    rows.forEach((t) => {
+      if (!t.created_at) return;
+      const d = new Date(t.created_at);
+      const bucket = buckets.find((b) => d >= b.start && d <= b.end);
+      if (bucket) bucket.value++;
+    });
+    return buckets;
+  }
+  const counts = new Map();
+  rows.forEach((t) => {
+    if (!t.created_at) return;
+    const d = new Date(t.created_at);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  });
+  return [...counts.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([key, value]) => {
+    const [y, m] = key.split("-");
+    return { key, label: new Date(Number(y), Number(m) - 1, 1).toLocaleDateString(undefined, { month: "short", year: "2-digit" }), value };
+  });
+}
+
 function DashboardPage({ setPage, setSelectedTicket }) {
   const { token } = useAuth();
   const [tickets, setTickets] = useState([]);
-  const [stats, setStats] = useState(null);
+  const [timeRange, setTimeRange] = useState("30");
+  const [drill, setDrill] = useState({ type: null, value: null });
 
   useEffect(() => {
     api.get("/tickets", token).then(setTickets).catch(() => {});
-    api.get("/dashboard/stats", token).then(setStats).catch(() => {});
   }, [token]);
 
-  const recent = tickets.slice(0, 20);
+  const rangedTickets = useMemo(() => {
+    const range = TIME_RANGES.find((r) => r.key === timeRange);
+    if (!range || range.days == null) return tickets;
+    const cutoff = Date.now() - range.days * 86400000;
+    return tickets.filter((t) => t.created_at && new Date(t.created_at).getTime() >= cutoff);
+  }, [tickets, timeRange]);
+
+  const toggleDrill = (type, value) => {
+    setDrill((current) => (current.type === type && current.value === value ? { type: null, value: null } : { type, value }));
+  };
+
+  const drillFiltered = useMemo(() => {
+    if (!drill.type) return rangedTickets;
+    return rangedTickets.filter((t) => {
+      if (drill.type === "status") return t.status === drill.value;
+      if (drill.type === "priority") return t.priority === drill.value;
+      if (drill.type === "product") return (t.product_name || "Not set") === drill.value;
+      if (drill.type === "customer") return (t.company_name || t.customer || "Not set") === drill.value;
+      return true;
+    });
+  }, [rangedTickets, drill]);
+
+  const recent = drillFiltered.slice(0, 20);
+
+  const kpis = useMemo(() => ({
+    total: rangedTickets.length,
+    open: rangedTickets.filter((t) => t.status === "open").length,
+    in_progress: rangedTickets.filter((t) => t.status === "in_progress").length,
+    completed: rangedTickets.filter((t) => t.status === "completed").length,
+    critical: rangedTickets.filter((t) => t.priority === "critical").length,
+    overdue: rangedTickets.filter((t) => t.due_date && t.status !== "completed" && new Date(t.due_date) < new Date()).length,
+  }), [rangedTickets]);
+
+  const statusData = useMemo(() => statuses.map((s) => ({
+    key: s,
+    label: STATUS_LABELS[s],
+    value: rangedTickets.filter((t) => t.status === s).length,
+    color: STATUS_COLORS[s],
+  })), [rangedTickets]);
+
+  const priorityData = useMemo(() => priorities.map((p) => ({
+    key: p,
+    label: p.charAt(0).toUpperCase() + p.slice(1),
+    value: rangedTickets.filter((t) => t.priority === p).length,
+    color: PRIORITY_COLORS[p],
+  })), [rangedTickets]);
+
+  const productData = useMemo(() => topByKey(rangedTickets, (t) => t.product_name), [rangedTickets]);
+  const customerData = useMemo(() => topByKey(rangedTickets, (t) => t.company_name || t.customer), [rangedTickets]);
+  const trendData = useMemo(() => buildTrend(rangedTickets, timeRange), [rangedTickets, timeRange]);
+
+  const drillLabel = drill.type && ({
+    status: statusData.find((d) => d.key === drill.value)?.label,
+    priority: priorityData.find((d) => d.key === drill.value)?.label,
+    product: drill.value,
+    customer: drill.value,
+  })[drill.type];
+
   return h("div", null,
     h(PageHeader, { title: "Operational Dashboard", subtitle: "Live software-support workload, ownership, and resolution status." }),
+    h("div", { className: "time-range-row" },
+      h("span", { className: "time-range-label" }, "Time range"),
+      h("div", { className: "time-range-group" },
+        TIME_RANGES.map((r) => h("button", {
+          key: r.key,
+          className: `time-range-btn ${timeRange === r.key ? "active" : ""}`,
+          onClick: () => setTimeRange(r.key),
+        }, r.label))
+      )
+    ),
     h("div", { className: "stats-grid" },
-      h(StatCard, { label: "Total Tickets", value: stats?.total ?? tickets.length, tone: "primary" }),
-      h(StatCard, { label: "Open", value: stats?.open ?? tickets.filter((t) => t.status === "open").length, tone: "info" }),
-      h(StatCard, { label: "In Progress", value: stats?.in_progress ?? tickets.filter((t) => t.status === "in_progress").length, tone: "warning" }),
-      h(StatCard, { label: "Completed", value: stats?.completed ?? tickets.filter((t) => t.status === "completed").length, tone: "success" }),
-      h(StatCard, { label: "Critical", value: tickets.filter((t) => t.priority === "critical").length, tone: "danger" })
+      h(StatCard, { label: "Total Tickets", value: kpis.total, tone: "primary" }),
+      h(StatCard, { label: "Open", value: kpis.open, tone: "info" }),
+      h(StatCard, { label: "In Progress", value: kpis.in_progress, tone: "warning" }),
+      h(StatCard, { label: "Completed", value: kpis.completed, tone: "success" }),
+      h(StatCard, { label: "Critical", value: kpis.critical, tone: "danger" }),
+      h(StatCard, { label: "Overdue", value: kpis.overdue, tone: "danger" })
+    ),
+    h("div", { className: "analytics-grid" },
+      h("section", { className: "panel chart-panel chart-panel-wide" },
+        h("div", { className: "panel-header" }, h("h2", { className: "panel-title" }, "Tickets Created"), h("span", { className: "small muted" }, "Click a point to inspect")),
+        h("div", { className: "panel-body" }, h(TrendChart, { data: trendData }))
+      ),
+      h("section", { className: "panel chart-panel" },
+        h("div", { className: "panel-header" }, h("h2", { className: "panel-title" }, "Status Breakdown"), h("span", { className: "small muted" }, "Click a bar to filter")),
+        h("div", { className: "panel-body" }, h(BarChartCard, { data: statusData, selectedKey: drill.type === "status" ? drill.value : null, onSelect: (key) => toggleDrill("status", key) }))
+      ),
+      h("section", { className: "panel chart-panel" },
+        h("div", { className: "panel-header" }, h("h2", { className: "panel-title" }, "Priority Breakdown"), h("span", { className: "small muted" }, "Click a bar to filter")),
+        h("div", { className: "panel-body" }, h(BarChartCard, { data: priorityData, selectedKey: drill.type === "priority" ? drill.value : null, onSelect: (key) => toggleDrill("priority", key) }))
+      ),
+      h("section", { className: "panel chart-panel" },
+        h("div", { className: "panel-header" }, h("h2", { className: "panel-title" }, "Tickets by Product"), h("span", { className: "small muted" }, "Top products")),
+        h("div", { className: "panel-body" }, h(BarChartCard, { data: productData, selectedKey: drill.type === "product" ? drill.value : null, onSelect: (key) => toggleDrill("product", key) }))
+      ),
+      h("section", { className: "panel chart-panel" },
+        h("div", { className: "panel-header" }, h("h2", { className: "panel-title" }, "Tickets by Customer"), h("span", { className: "small muted" }, "Top customers")),
+        h("div", { className: "panel-body" }, h(BarChartCard, { data: customerData, selectedKey: drill.type === "customer" ? drill.value : null, onSelect: (key) => toggleDrill("customer", key) }))
+      )
+    ),
+    drill.type && h("div", { className: "drill-banner" },
+      h("span", null, "Filtered by ", h("strong", null, drillLabel)),
+      h("button", { className: "btn btn-outline btn-sm", onClick: () => setDrill({ type: null, value: null }) }, "Clear filter")
     ),
     h(EnterpriseTable, {
       title: "Recent Tickets",
@@ -280,7 +451,7 @@ function TicketsPage({ setPage, setSelectedTicket }) {
         { key: "status", label: "All Statuses", value: (r) => r.status, options: uniqueOptions(tickets, (r) => r.status) },
         { key: "priority", label: "All Priorities", value: (r) => r.priority, options: uniqueOptions(tickets, (r) => r.priority) },
         { key: "type", label: "All Types", value: (r) => r.type, options: uniqueOptions(tickets, (r) => r.type) },
-        { key: "company_name", label: "All Companies", value: (r) => r.company_name || r.customer, options: uniqueOptions(tickets, (r) => r.company_name || r.customer) },
+        { key: "company_name", label: "All Customers", value: (r) => r.company_name || r.customer, options: uniqueOptions(tickets, (r) => r.company_name || r.customer) },
         { key: "product_name", label: "All Products", value: (r) => r.product_name, options: uniqueOptions(tickets, (r) => r.product_name) },
       ],
       onRowClick: (ticket) => { setSelectedTicket(ticket.id); setPage("ticket-detail"); },
@@ -293,25 +464,28 @@ function TicketModal({ onClose, onSaved }) {
   const { token, user } = useAuth();
   const confirm = useConfirm();
   const [products, setProducts] = useState([]);
-  const initialCompanyName = user?.company_name || "";
-  const [form, setForm] = useState({ title: "", description: "", customer: initialCompanyName, company_id: user?.company_id || "", product_id: "", priority: "medium", type: "SOFTWARE_SUPPORT", due_date: "", milestones: [] });
+  const [customers, setCustomers] = useState([]);
+  const initialCustomerName = user?.company_name || "";
+  const [form, setForm] = useState({ title: "", description: "", customer: initialCustomerName, company_id: user?.company_id || "", product_id: "", priority: "medium", type: "SOFTWARE_SUPPORT", due_date: "", milestones: [] });
   const [milestone, setMilestone] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     api.get("/products", token).then(setProducts).catch(() => setError("Unable to load products for ticket routing."));
+    if (can(user, "companies.manage")) api.get("/companies", token).then(setCustomers).catch(() => {});
   }, [token]);
 
   const set = (key, value) => setForm((current) => ({ ...current, [key]: value }));
   const activeProducts = products.filter((product) => product.active !== false);
+  const chooseCustomer = (customerId) => {
+    const customer = customers.find((item) => item.id === customerId);
+    setForm((current) => ({ ...current, company_id: customerId, customer: customer?.name || "" }));
+  };
   const chooseProduct = (productId) => {
-    const product = products.find((item) => item.id === productId);
     setForm((current) => ({
       ...current,
       product_id: productId,
-      company_id: product?.company_id || current.company_id,
-      customer: product?.company_name || current.customer,
     }));
   };
   const addMilestone = () => {
@@ -326,6 +500,10 @@ function TicketModal({ onClose, onSaved }) {
     }
     if (!form.title.trim()) {
       setError("Ticket title is required.");
+      return;
+    }
+    if (!form.company_id) {
+      setError("Customer is required.");
       return;
     }
     const selectedProduct = products.find((product) => product.id === form.product_id);
@@ -355,11 +533,15 @@ function TicketModal({ onClose, onSaved }) {
     error && h("div", { className: "error" }, error),
     h("div", { className: "form-grid" },
       Field({ label: "Ticket Title", children: h("input", { className: "input", value: form.title, onChange: (e) => set("title", e.target.value), placeholder: "e.g. Login Issue - CRM Portal" }) }),
+      can(user, "companies.manage") && Field({ label: "Customer", children: h("select", { className: "select", value: form.company_id, onChange: (e) => chooseCustomer(e.target.value) },
+        h("option", { value: "" }, "Select customer"),
+        customers.filter((customer) => customer.active !== false).map((customer) => h("option", { key: customer.id, value: customer.id }, customer.name))
+      ) }),
       Field({ label: "Product", children: h("select", { className: "select", value: form.product_id, onChange: (e) => chooseProduct(e.target.value) },
         h("option", { value: "" }, activeProducts.length ? "Select product" : "No active products available"),
-        activeProducts.map((product) => h("option", { key: product.id, value: product.id }, can(user, "companies.manage") ? `${product.name} - ${product.company_name}` : product.name))
+        activeProducts.map((product) => h("option", { key: product.id, value: product.id }, product.name))
       ) }),
-      Field({ label: "Customer", children: h("input", { className: "input", value: form.customer, readOnly: true, placeholder: "Auto-filled from selected product" }) }),
+      Field({ label: "Customer", children: h("input", { className: "input", value: form.customer, readOnly: true, placeholder: "Auto-filled from logged-in user" }) }),
       Field({ label: "Priority", children: h("select", { className: "select", value: form.priority, onChange: (e) => set("priority", e.target.value) }, priorities.map((p) => h("option", { key: p, value: p }, p))) }),
       Field({ label: "Type", children: h("select", { className: "select", value: form.type, onChange: (e) => set("type", e.target.value) }, ticketTypes.map((t) => h("option", { key: t, value: t }, t.replace(/_/g, " ")))) }),
       Field({ label: "Due Date", children: h("input", { className: "input", type: "date", value: form.due_date, onChange: (e) => set("due_date", e.target.value) }) })
@@ -444,7 +626,7 @@ function TicketDetailPage({ ticketId, setPage }) {
           h("div", { className: "panel-body" },
             h("p", { style: { lineHeight: 1.7, color: "var(--muted)", marginTop: 0 } }, ticket.description || "No description provided."),
             h("div", { className: "info-grid" },
-              h("div", { className: "info-item" }, h("label", null, "Company"), h("span", null, ticket.company_name || "Not set")),
+              h("div", { className: "info-item" }, h("label", null, "Customer"), h("span", null, ticket.company_name || "Not set")),
               h("div", { className: "info-item" }, h("label", null, "Product"), h("span", null, ticket.product_name || "Not set")),
               h("div", { className: "info-item" }, h("label", null, "Customer"), h("span", null, ticket.customer || "Not set")),
               h("div", { className: "info-item" }, h("label", null, "Due Date"), h("span", null, fmtDate(ticket.due_date))),
@@ -507,19 +689,17 @@ function TicketDetailPage({ ticketId, setPage }) {
 function ProductsPage() {
   const { token } = useAuth();
   const [products, setProducts] = useState([]);
-  const [companies, setCompanies] = useState([]);
   const [editing, setEditing] = useState(null);
   const load = () => api.get("/products", token).then(setProducts);
 
   useEffect(() => {
     load().catch(() => {});
-    api.get("/companies", token).then(setCompanies).catch(() => {});
   }, [token]);
 
   return h("div", null,
     h(PageHeader, {
       title: "Products",
-      subtitle: "Manage product-level routing and escalation ownership for each customer company.",
+      subtitle: "Manage product-level routing and escalation ownership used by every customer.",
       actions: h("button", { className: "btn btn-primary", onClick: () => setEditing({}) }, "New Product"),
     }),
     h(EnterpriseTable, {
@@ -527,7 +707,6 @@ function ProductsPage() {
       rows: products,
       columns: [
         { header: "Product", accessor: "name", cell: (p) => h("div", null, h("div", { style: { fontWeight: 800 } }, p.name), h("div", { className: "small muted mono" }, p.code || "No code")) },
-        { header: "Company", accessor: "company_name", cell: (p) => p.company_name || "Not set" },
         { header: "Escalation Matrix", accessor: "escalation_people", exportValue: (p) => (p.escalation_people || []).map((person) => person.name).join("; "), cell: (p) => {
           const people = p.escalation_people || [];
           return people.length ? people.map((person) => person.name).join(" -> ") : "Not configured";
@@ -537,16 +716,15 @@ function ProductsPage() {
         { header: "Actions", id: "actions", export: false, stopRowClick: true, cell: (p) => h("button", { className: "btn btn-outline btn-sm", onClick: () => setEditing(p) }, "Edit") },
       ],
       filters: [
-        { key: "company_name", label: "All Companies", value: (p) => p.company_name, options: uniqueOptions(products, (p) => p.company_name) },
         { key: "active", label: "All Statuses", value: (p) => p.active === false ? "Inactive" : "Active", options: [{ value: "Active", label: "Active" }, { value: "Inactive", label: "Inactive" }] },
       ],
-      searchPlaceholder: "Search products, companies, escalation people...",
+      searchPlaceholder: "Search products and escalation people...",
     }),
-    editing && h(ProductModal, { product: editing.id ? editing : null, companies, onClose: () => setEditing(null), onSaved: () => { setEditing(null); load(); } })
+    editing && h(ProductModal, { product: editing.id ? editing : null, onClose: () => setEditing(null), onSaved: () => { setEditing(null); load(); } })
   );
 }
 
-function ProductModal({ product, companies, onClose, onSaved }) {
+function ProductModal({ product, onClose, onSaved }) {
   const { token } = useAuth();
   const confirm = useConfirm();
   const isEdit = Boolean(product);
@@ -554,7 +732,6 @@ function ProductModal({ product, companies, onClose, onSaved }) {
   const [form, setForm] = useState({
     name: product?.name || "",
     code: product?.code || "",
-    company_id: product?.company_id || "",
     escalation_user_ids: product?.escalation_user_ids || [],
     active: product?.active !== false,
   });
@@ -562,16 +739,9 @@ function ProductModal({ product, companies, onClose, onSaved }) {
   const set = (key, value) => setForm((current) => ({ ...current, [key]: value }));
 
   useEffect(() => {
-    if (!form.company_id) {
-      setAssignable([]);
-      return;
-    }
-    api.get(`/users/assignable?company_id=${encodeURIComponent(form.company_id)}`, token).then(setAssignable).catch(() => setAssignable([]));
-  }, [token, form.company_id]);
+    api.get("/users/assignable", token).then(setAssignable).catch(() => setAssignable([]));
+  }, [token]);
 
-  const chooseCompany = (companyId) => {
-    setForm((current) => ({ ...current, company_id: companyId, escalation_user_ids: [] }));
-  };
   const toggleEscalation = (userId) => {
     set("escalation_user_ids", form.escalation_user_ids.includes(userId)
       ? form.escalation_user_ids.filter((id) => id !== userId)
@@ -586,10 +756,6 @@ function ProductModal({ product, companies, onClose, onSaved }) {
     set("escalation_user_ids", next);
   };
   const submit = async () => {
-    if (!form.company_id) {
-      setError("Select a company for this product.");
-      return;
-    }
     if (!form.escalation_user_ids.length) {
       setError("Select at least one escalation person.");
       return;
@@ -606,7 +772,6 @@ function ProductModal({ product, companies, onClose, onSaved }) {
     }
   };
 
-  const selectedCompany = companies.find((company) => company.id === form.company_id);
   return h(Modal, {
     title: isEdit ? `Edit Product - ${product.name}` : "Create Product",
     onClose,
@@ -616,13 +781,9 @@ function ProductModal({ product, companies, onClose, onSaved }) {
     h("div", { className: "form-grid" },
       Field({ label: "Product Name", children: h("input", { className: "input", value: form.name, onChange: (e) => set("name", e.target.value), placeholder: "e.g. CRM Portal" }) }),
       Field({ label: "Product Code", children: h("input", { className: "input", value: form.code, onChange: (e) => set("code", e.target.value), placeholder: "e.g. CRM" }) }),
-      Field({ label: "Customer Company", children: h("select", { className: "select", value: form.company_id, onChange: (e) => chooseCompany(e.target.value) },
-        h("option", { value: "" }, "Select company"),
-        companies.filter((company) => company.active !== false).map((company) => h("option", { key: company.id, value: company.id }, company.name))
-      ) }),
       Field({ label: "Status", children: h("select", { className: "select", value: form.active ? "active" : "inactive", onChange: (e) => set("active", e.target.value === "active") }, h("option", { value: "active" }, "Active"), h("option", { value: "inactive" }, "Inactive")) })
     ),
-    Field({ label: `Escalation Matrix${selectedCompany ? ` - ${selectedCompany.name}` : ""}`, children: h("div", { className: "permission-grid" },
+    Field({ label: "Escalation Matrix", children: h("div", { className: "permission-grid" },
       assignable.length ? assignable.map((person) => {
         const selected = form.escalation_user_ids.includes(person.id);
         return h("label", { key: person.id, className: "permission-item" },
@@ -633,30 +794,30 @@ function ProductModal({ product, companies, onClose, onSaved }) {
             h("button", { className: "btn btn-outline btn-sm", type: "button", onClick: (e) => { e.preventDefault(); e.stopPropagation(); moveEscalation(person.id, 1); } }, "Down")
           )
         );
-      }) : h("div", { className: "small muted" }, form.company_id ? "No active SPOC users found for this company." : "Select a company to load escalation people.")
+      }) : h("div", { className: "small muted" }, "No active SPOC users found.")
     ) })
   );
 }
 
-function CompaniesPage() {
+function CustomersPage() {
   const { token } = useAuth();
   const confirm = useConfirm();
-  const [companies, setCompanies] = useState([]);
+  const [customers, setCustomers] = useState([]);
   const [editing, setEditing] = useState(null);
-  const load = () => api.get("/companies", token).then(setCompanies);
+  const load = () => api.get("/companies", token).then(setCustomers);
   useEffect(() => { load().catch(() => {}); }, [token]);
 
   return h("div", null,
     h(PageHeader, {
-      title: "Companies",
-      subtitle: "Create and maintain customer company records for tenant-isolated support data.",
-      actions: h("button", { className: "btn btn-primary", onClick: () => setEditing({}) }, "New Company"),
+      title: "Customers",
+      subtitle: "Create and maintain customer records for tenant-isolated support data.",
+      actions: h("button", { className: "btn btn-primary", onClick: () => setEditing({}) }, "New Customer"),
     }),
     h(EnterpriseTable, {
-      title: "Companies",
-      rows: companies,
+      title: "Customers",
+      rows: customers,
       columns: [
-        { header: "Company", accessor: "name", cell: (c) => h("div", null, h("div", { style: { fontWeight: 800 } }, c.name), h("div", { className: "small muted mono" }, c.code)) },
+        { header: "Customer", accessor: "name", cell: (c) => h("div", null, h("div", { style: { fontWeight: 800 } }, c.name), h("div", { className: "small muted mono" }, c.code)) },
         { header: "Status", accessor: "active", exportValue: (c) => c.active === false ? "Inactive" : "Active", cell: (c) => h(Badge, { value: c.active === false ? "Inactive" : "Active", tone: c.active === false ? "inactive" : "active" }) },
         { header: "Created", accessor: "created_at", exportValue: (c) => fmtDate(c.created_at), cell: (c) => fmtDate(c.created_at) },
         { header: "Actions", id: "actions", export: false, stopRowClick: true, cell: (c) => h("button", { className: "btn btn-outline btn-sm", onClick: () => setEditing(c) }, "Edit") },
@@ -664,25 +825,25 @@ function CompaniesPage() {
       filters: [
         { key: "active", label: "All Statuses", value: (c) => c.active === false ? "Inactive" : "Active", options: [{ value: "Active", label: "Active" }, { value: "Inactive", label: "Inactive" }] },
       ],
-      searchPlaceholder: "Search companies...",
+      searchPlaceholder: "Search customers...",
     }),
-    editing && h(CompanyModal, { company: editing.id ? editing : null, onClose: () => setEditing(null), onSaved: () => { setEditing(null); load(); } })
+    editing && h(CustomerModal, { customer: editing.id ? editing : null, onClose: () => setEditing(null), onSaved: () => { setEditing(null); load(); } })
   );
 }
 
-function CompanyModal({ company, onClose, onSaved }) {
+function CustomerModal({ customer, onClose, onSaved }) {
   const { token } = useAuth();
   const confirm = useConfirm();
-  const isEdit = Boolean(company);
-  const [form, setForm] = useState({ name: company?.name || "", code: company?.code || "", active: company?.active !== false });
+  const isEdit = Boolean(customer);
+  const [form, setForm] = useState({ name: customer?.name || "", code: customer?.code || "", active: customer?.active !== false });
   const [error, setError] = useState("");
   const set = (key, value) => setForm((current) => ({ ...current, [key]: value }));
   const submit = async () => {
-    const ok = await confirm({ title: isEdit ? "Save Company" : "Create Company", message: `${isEdit ? "Save changes for" : "Create"} company ${form.name || "Untitled"}?`, confirmText: isEdit ? "Save" : "Create" });
+    const ok = await confirm({ title: isEdit ? "Save Customer" : "Create Customer", message: `${isEdit ? "Save changes for" : "Create"} customer ${form.name || "Untitled"}?`, confirmText: isEdit ? "Save" : "Create" });
     if (!ok) return;
     setError("");
     try {
-      if (isEdit) await api.patch(`/companies/${company.id}`, form, token);
+      if (isEdit) await api.patch(`/companies/${customer.id}`, form, token);
       else await api.post("/companies", form, token);
       onSaved();
     } catch (err) {
@@ -690,14 +851,14 @@ function CompanyModal({ company, onClose, onSaved }) {
     }
   };
   return h(Modal, {
-    title: isEdit ? `Edit Company - ${company.name}` : "Create Company",
+    title: isEdit ? `Edit Customer - ${customer.name}` : "Create Customer",
     onClose,
-    footer: [h("button", { key: "cancel", className: "btn btn-outline", onClick: onClose }, "Cancel"), h("button", { key: "save", className: "btn btn-primary", onClick: submit }, isEdit ? "Save Changes" : "Create Company")],
+    footer: [h("button", { key: "cancel", className: "btn btn-outline", onClick: onClose }, "Cancel"), h("button", { key: "save", className: "btn btn-primary", onClick: submit }, isEdit ? "Save Changes" : "Create Customer")],
   },
     error && h("div", { className: "error" }, error),
     h("div", { className: "form-grid" },
-      Field({ label: "Company Name", children: h("input", { className: "input", value: form.name, onChange: (e) => set("name", e.target.value), placeholder: "Customer company name" }) }),
-      Field({ label: "Company Code", children: h("input", { className: "input", value: form.code, onChange: (e) => set("code", e.target.value), placeholder: "e.g. ACME" }) }),
+      Field({ label: "Customer Name", children: h("input", { className: "input", value: form.name, onChange: (e) => set("name", e.target.value), placeholder: "Customer name" }) }),
+      Field({ label: "Customer Code", children: h("input", { className: "input", value: form.code, onChange: (e) => set("code", e.target.value), placeholder: "e.g. ACME" }) }),
       Field({ label: "Status", children: h("select", { className: "select", value: form.active ? "active" : "inactive", onChange: (e) => set("active", e.target.value === "active") }, h("option", { value: "active" }, "Active"), h("option", { value: "inactive" }, "Inactive")) })
     )
   );
@@ -738,12 +899,12 @@ function UsersPage() {
   const { token, user } = useAuth();
   const confirm = useConfirm();
   const [users, setUsers] = useState([]);
-  const [companies, setCompanies] = useState([]);
+  const [customers, setCustomers] = useState([]);
   const [editing, setEditing] = useState(null);
   const load = () => api.get("/users", token).then(setUsers);
   useEffect(() => {
     load().catch(() => {});
-    if (can(user, "companies.manage")) api.get("/companies", token).then(setCompanies).catch(() => {});
+    if (can(user, "companies.manage")) api.get("/companies", token).then(setCustomers).catch(() => {});
   }, [token, user]);
 
   const remove = async (target) => {
@@ -764,7 +925,7 @@ function UsersPage() {
       rows: users,
       columns: [
         { header: "User", accessor: "name", cell: (u) => h("div", { style: { display: "flex", alignItems: "center", gap: 10 } }, h("div", { className: "avatar" }, u.avatar || u.name?.[0]), h("div", null, h("div", { style: { fontWeight: 800 } }, u.name), h("div", { className: "small muted" }, u.email))) },
-        { header: "Company", accessor: "company_name", cell: (u) => u.company_name || "Global" },
+        { header: "Customer", accessor: "company_name", cell: (u) => u.company_name || "Global" },
         { header: "Role", accessor: "role_name", cell: (u) => h("span", { className: "badge badge-type" }, u.role_name || u.role) },
         { header: "Phone", accessor: "phone" },
         { header: "Skills", accessor: "skills" },
@@ -776,23 +937,23 @@ function UsersPage() {
         ) },
       ],
       filters: [
-        { key: "company_name", label: "All Companies", value: (r) => r.company_name || "Global", options: uniqueOptions(users, (r) => r.company_name || "Global") },
+        { key: "company_name", label: "All Customers", value: (r) => r.company_name || "Global", options: uniqueOptions(users, (r) => r.company_name || "Global") },
         { key: "role_name", label: "All Roles", value: (r) => r.role_name, options: uniqueOptions(users, (r) => r.role_name) },
         { key: "active", label: "All Statuses", value: (r) => r.active === false ? "Inactive" : "Active", options: [{ value: "Active", label: "Active" }, { value: "Inactive", label: "Inactive" }] },
       ],
       searchPlaceholder: "Search users...",
     }),
-    editing && h(UserModal, { user: editing.id ? editing : null, companies, onClose: () => setEditing(null), onSaved: () => { setEditing(null); load(); if (can(user, "companies.manage")) api.get("/companies", token).then(setCompanies).catch(() => {}); } })
+    editing && h(UserModal, { user: editing.id ? editing : null, customers, onClose: () => setEditing(null), onSaved: () => { setEditing(null); load(); if (can(user, "companies.manage")) api.get("/companies", token).then(setCustomers).catch(() => {}); } })
   );
 }
 
-function UserModal({ user, companies, onClose, onSaved }) {
+function UserModal({ user, customers, onClose, onSaved }) {
   const { token, user: currentUser } = useAuth();
   const confirm = useConfirm();
   const [roles, setRoles] = useState([]);
   const isEdit = Boolean(user);
-  const [companyMode, setCompanyMode] = useState("existing");
-  const [newCompany, setNewCompany] = useState({ name: "", code: "" });
+  const [customerMode, setCustomerMode] = useState("existing");
+  const [newCustomer, setNewCustomer] = useState({ name: "", code: "" });
   const [form, setForm] = useState({ name: user?.name || "", email: user?.email || "", password: "", role_id: user?.role_id || "role_freelancer", company_id: user?.company_id || currentUser?.company_id || "", phone: user?.phone || "", skills: user?.skills || "", active: user?.active !== false });
   const [error, setError] = useState("");
   const set = (key, value) => setForm((current) => ({ ...current, [key]: value }));
@@ -803,17 +964,17 @@ function UserModal({ user, companies, onClose, onSaved }) {
     if (!ok) return;
     setError("");
     try {
-      let companyId = form.company_id;
-      if (!isEdit && can(currentUser, "companies.manage") && companyMode === "new") {
-        const created = await api.post("/companies", newCompany, token);
-        companyId = created.id;
+      let customerId = form.company_id;
+      if (!isEdit && can(currentUser, "companies.manage") && customerMode === "new") {
+        const created = await api.post("/companies", newCustomer, token);
+        customerId = created.id;
       }
       if (isEdit) {
-        const payload = { name: form.name, role_id: form.role_id, company_id: companyId, phone: form.phone, skills: form.skills, active: form.active };
+        const payload = { name: form.name, role_id: form.role_id, company_id: customerId, phone: form.phone, skills: form.skills, active: form.active };
         if (form.password) payload.password = form.password;
         await api.patch(`/users/${user.id}`, payload, token);
       } else {
-        await api.post("/users", { ...form, company_id: companyId }, token);
+        await api.post("/users", { ...form, company_id: customerId }, token);
       }
       onSaved();
     } catch (err) {
@@ -832,17 +993,17 @@ function UserModal({ user, companies, onClose, onSaved }) {
       Field({ label: "Email Address", children: h("input", { className: "input", type: "email", value: form.email, disabled: isEdit, onChange: (e) => set("email", e.target.value) }) }),
       Field({ label: isEdit ? "New Password" : "Password", children: h("input", { className: "input", type: "password", value: form.password, onChange: (e) => set("password", e.target.value) }) }),
       Field({ label: "Role", children: h("select", { className: "select", value: form.role_id, onChange: (e) => set("role_id", e.target.value) }, roles.map((r) => h("option", { key: r.id, value: r.id }, r.name))) }),
-      can(currentUser, "companies.manage") && Field({ label: "Company Setup", children: h("select", { className: "select", value: companyMode, disabled: isEdit, onChange: (e) => setCompanyMode(e.target.value) },
-        h("option", { value: "existing" }, "Existing company"),
-        h("option", { value: "new" }, "Create new company")
+      can(currentUser, "companies.manage") && Field({ label: "Customer Setup", children: h("select", { className: "select", value: customerMode, disabled: isEdit, onChange: (e) => setCustomerMode(e.target.value) },
+        h("option", { value: "existing" }, "Existing customer"),
+        h("option", { value: "new" }, "Create new customer")
       ) }),
-      can(currentUser, "companies.manage") && companyMode === "existing" && Field({ label: "Company", children: h("select", { className: "select", value: form.company_id || "", onChange: (e) => set("company_id", e.target.value) },
-        h("option", { value: "" }, "Global / no company"),
-        companies.map((company) => h("option", { key: company.id, value: company.id }, company.name))
+      can(currentUser, "companies.manage") && customerMode === "existing" && Field({ label: "Customer", children: h("select", { className: "select", value: form.company_id || "", onChange: (e) => set("company_id", e.target.value) },
+        h("option", { value: "" }, "Global / no customer"),
+        customers.map((customer) => h("option", { key: customer.id, value: customer.id }, customer.name))
       ) }),
-      can(currentUser, "companies.manage") && !isEdit && companyMode === "new" && Field({ label: "Company Name", children: h("input", { className: "input", value: newCompany.name, onChange: (e) => setNewCompany((current) => ({ ...current, name: e.target.value })), placeholder: "Customer company name" }) }),
-      can(currentUser, "companies.manage") && !isEdit && companyMode === "new" && Field({ label: "Company Code", children: h("input", { className: "input", value: newCompany.code, onChange: (e) => setNewCompany((current) => ({ ...current, code: e.target.value })), placeholder: "e.g. ACME" }) }),
-      !can(currentUser, "companies.manage") && Field({ label: "Company", children: h("input", { className: "input", value: currentUser?.company_name || "Not assigned", readOnly: true }) }),
+      can(currentUser, "companies.manage") && !isEdit && customerMode === "new" && Field({ label: "Customer Name", children: h("input", { className: "input", value: newCustomer.name, onChange: (e) => setNewCustomer((current) => ({ ...current, name: e.target.value })), placeholder: "Customer name" }) }),
+      can(currentUser, "companies.manage") && !isEdit && customerMode === "new" && Field({ label: "Customer Code", children: h("input", { className: "input", value: newCustomer.code, onChange: (e) => setNewCustomer((current) => ({ ...current, code: e.target.value })), placeholder: "e.g. ACME" }) }),
+      !can(currentUser, "companies.manage") && Field({ label: "Customer", children: h("input", { className: "input", value: currentUser?.company_name || "Not assigned", readOnly: true }) }),
       Field({ label: "Phone", children: h("input", { className: "input", value: form.phone, onChange: (e) => set("phone", e.target.value) }) }),
       Field({ label: "Status", children: h("select", { className: "select", value: form.active ? "active" : "inactive", onChange: (e) => set("active", e.target.value === "active") }, h("option", { value: "active" }, "Active"), h("option", { value: "inactive" }, "Inactive")) })
     ),
@@ -955,7 +1116,7 @@ export function App() {
     page === "dashboard" && h(DashboardPage, { setPage, setSelectedTicket }),
     page === "tickets" && h(TicketsPage, { setPage, setSelectedTicket }),
     page === "ticket-detail" && h(TicketDetailPage, { ticketId: selectedTicket, setPage }),
-    page === "companies" && h(CompaniesPage),
+    page === "customers" && h(CustomersPage),
     page === "products" && h(ProductsPage),
     page === "signoffs" && h(SignoffsPage),
     page === "users" && h(UsersPage),
