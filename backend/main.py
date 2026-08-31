@@ -146,6 +146,25 @@ def resolve_product_assignee(db: Session, product: Product) -> str:
             return escalation_user.id
     raise HTTPException(400, "Selected product has no active escalation owner")
 
+def ticket_code(value: str, fallback: str) -> str:
+    raw = (value or fallback or "NA").upper()
+    cleaned = "".join(ch if ch.isalnum() else "_" for ch in raw).strip("_")
+    return cleaned or "NA"
+
+def next_ticket_id(db: Session, company: Company, product: Product, created_at: datetime) -> str:
+    company_code = ticket_code(company.code, company.name)
+    product_code = ticket_code(product.code, product.name)
+    date_code = created_at.strftime("%Y%m%d")
+    prefix = f"T-{company_code}-{product_code}-{date_code}"
+    existing = db.query(Ticket.id).filter(Ticket.id.like(f"{prefix}-%")).all()
+    max_no = 0
+    for (ticket_id,) in existing:
+        try:
+            max_no = max(max_no, int(str(ticket_id).rsplit("-", 1)[-1]))
+        except ValueError:
+            continue
+    return f"{prefix}-{str(max_no + 1).zfill(3)}"
+
 # ─── Serialisers ─────────────────────────────────────────────────────────────
 def ser_company(c: Company) -> dict:
     return {
@@ -634,17 +653,15 @@ def create_ticket(payload: TicketCreate, user: User = Depends(require_perm("tick
     if not company or not company.active:
         raise HTTPException(400, "Product company is inactive")
     assigned_to = resolve_product_assignee(db, product)
-    count = db.query(Ticket).count()
-    tid = f"T-{str(count + 1).zfill(3)}"
-    while db.query(Ticket).filter(Ticket.id == tid).first():
-        count += 1; tid = f"T-{str(count + 1).zfill(3)}"
+    created_at = datetime.utcnow()
+    tid = next_ticket_id(db, company, product, created_at)
     t = Ticket(id=tid, title=title, description=payload.description,
                customer=company.name, company_id=product.company_id, product_id=product.id,
                assigned_to=assigned_to,
                priority=payload.priority, type=payload.type,
                due_date=payload.due_date, milestones=payload.milestones,
                status="open", progress=0, created_by=user.id,
-               created_at=datetime.utcnow(), updated_at=datetime.utcnow())
+               created_at=created_at, updated_at=created_at)
     db.add(t)
     db.commit()
     db.refresh(t)
