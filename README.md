@@ -191,7 +191,15 @@ The frontend reaches the backend through Nginx:
 
 - `/api/` proxies to the FastAPI app
 - `/health` proxies to the backend health endpoint
-- `/uploads/` proxies uploaded files from the backend
+
+Every API route requires authentication except `POST /api/auth/login` and the
+`/health` probe. Uploaded files are not served statically: they are delivered by
+`GET /api/files/{file_id}`, which authenticates the caller and then authorises
+them against the ticket the file belongs to. Because a browser cannot send an
+`Authorization` header when it opens an image or a link, that route also accepts
+the httpOnly session cookie set at login, scoped to `/api/files` so it is never
+sent to a state-changing endpoint. Set `COOKIE_SECURE=true` when serving over
+HTTPS.
 
 The backend container listens on port `8000` inside the Docker network. The frontend is exposed on `${PORT:-80}`.
 

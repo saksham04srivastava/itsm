@@ -44,26 +44,63 @@ export function BarChartCard({ data, onSelect, selectedKey }) {
   );
 }
 
-// Line + area trend chart with a pointer-tracked crosshair and tooltip.
-export function TrendChart({ data, height = 170 }) {
+function niceStep(roughStep) {
+  const exponent = Math.floor(Math.log10(roughStep || 1));
+  const fraction = roughStep / 10 ** exponent;
+  const niceFraction = fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10;
+  return niceFraction * 10 ** exponent;
+}
+
+function niceTicks(max, count = 4) {
+  const top = Math.max(1, max);
+  const step = niceStep(top / count) || 1;
+  const niceMax = Math.ceil(top / step) * step;
+  const ticks = [];
+  for (let v = 0; v <= niceMax + 1e-9; v += step) ticks.push(Math.round(v));
+  return ticks;
+}
+
+// Catmull-Rom to cubic-Bezier smoothing so the line reads as a curve, not a spike.
+function smoothPath(points) {
+  if (points.length < 3) return points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+  let d = `M${points[0].x.toFixed(1)},${points[0].y.toFixed(1)}`;
+  for (let i = 0; i < points.length - 1; i++) {
+    const p0 = points[i - 1] || points[i];
+    const p1 = points[i];
+    const p2 = points[i + 1];
+    const p3 = points[i + 2] || p2;
+    const c1x = p1.x + (p2.x - p0.x) / 6;
+    const c1y = p1.y + (p2.y - p0.y) / 6;
+    const c2x = p2.x - (p3.x - p1.x) / 6;
+    const c2y = p2.y - (p3.y - p1.y) / 6;
+    d += ` C${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${p2.x.toFixed(1)},${p2.y.toFixed(1)}`;
+  }
+  return d;
+}
+
+// Line + area trend chart with a labeled value axis and a pointer-tracked crosshair tooltip.
+export function TrendChart({ data, height = 220 }) {
   const [hoverIndex, setHoverIndex] = useState(null);
   const svgRef = useRef(null);
   if (!data.length) return h(ChartEmpty, { text: "No tickets created in this range" });
 
   const width = 640;
-  const padding = { top: 14, right: 14, bottom: 24, left: 14 };
+  const padding = { top: 16, right: 14, bottom: 28, left: 30 };
   const innerW = width - padding.left - padding.right;
   const innerH = height - padding.top - padding.bottom;
-  const max = Math.max(1, ...data.map((d) => d.value));
+  const rawMax = Math.max(0, ...data.map((d) => d.value));
+  const ticks = niceTicks(rawMax, 4);
+  const niceMax = ticks[ticks.length - 1] || 1;
   const stepX = data.length > 1 ? innerW / (data.length - 1) : 0;
   const points = data.map((d, i) => ({
     ...d,
     x: padding.left + (data.length > 1 ? stepX * i : innerW / 2),
-    y: padding.top + innerH - (d.value / max) * innerH,
+    y: padding.top + innerH - (d.value / niceMax) * innerH,
   }));
-  const linePath = points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+  const linePath = smoothPath(points);
+  const baseY = (padding.top + innerH).toFixed(1);
   const areaPath = points.length
-    ? `${linePath} L${points[points.length - 1].x.toFixed(1)},${(padding.top + innerH).toFixed(1)} L${points[0].x.toFixed(1)},${(padding.top + innerH).toFixed(1)} Z`
+    ? `${linePath} L${points[points.length - 1].x.toFixed(1)},${baseY} L${points[0].x.toFixed(1)},${baseY} Z`
     : "";
 
   const handleMove = (e) => {
@@ -91,7 +128,13 @@ export function TrendChart({ data, height = 170 }) {
       onMouseMove: handleMove,
       onMouseLeave: () => setHoverIndex(null),
     },
-      h("line", { x1: padding.left, y1: padding.top + innerH, x2: width - padding.right, y2: padding.top + innerH, className: "trend-baseline" }),
+      ticks.map((t) => {
+        const y = padding.top + innerH - (t / niceMax) * innerH;
+        return h("g", { key: t },
+          h("line", { x1: padding.left, y1: y, x2: width - padding.right, y2: y, className: t === 0 ? "trend-baseline" : "trend-gridline" }),
+          h("text", { x: padding.left - 8, y: y + 3, textAnchor: "end", className: "trend-axis-label mono" }, t)
+        );
+      }),
       areaPath && h("path", { d: areaPath, className: "trend-area" }),
       h("path", { d: linePath, className: "trend-line" }),
       hovered && h("line", { x1: hovered.x, y1: padding.top, x2: hovered.x, y2: padding.top + innerH, className: "trend-crosshair" }),
@@ -99,7 +142,7 @@ export function TrendChart({ data, height = 170 }) {
       points.map((p, i) => (i % labelStep === 0 || i === points.length - 1) && h("text", {
         key: p.key,
         x: p.x,
-        y: height - 6,
+        y: height - 8,
         textAnchor: i === points.length - 1 ? "end" : i === 0 ? "start" : "middle",
         className: "trend-axis-label",
       }, p.label))

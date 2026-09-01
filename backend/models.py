@@ -53,6 +53,7 @@ class Company(Base):
     id          = Column(String, primary_key=True)
     name        = Column(String, unique=True, nullable=False)
     code        = Column(String, unique=True, nullable=False)
+    product_ids = Column(JSON, default=list)          # products subscribed/visible to this customer
     active      = Column(Boolean, default=True)
     created_at  = Column(DateTime, default=datetime.utcnow)
     updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

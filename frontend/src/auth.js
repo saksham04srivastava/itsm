@@ -34,6 +34,9 @@ export function AuthProvider({ children }) {
   };
 
   const logout = () => {
+    // Clears the httpOnly download cookie server-side; the local session is
+    // dropped regardless of whether that call succeeds.
+    api.post("/auth/logout", {}, token).catch(() => {});
     localStorage.removeItem("token");
     setToken(null);
     setUser(null);

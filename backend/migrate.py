@@ -29,12 +29,21 @@ def run(db_conn):
             id          VARCHAR PRIMARY KEY,
             name        VARCHAR UNIQUE NOT NULL,
             code        VARCHAR UNIQUE NOT NULL,
+            product_ids JSON DEFAULT '[]',
             active      BOOLEAN DEFAULT TRUE,
             created_at  TIMESTAMP DEFAULT NOW(),
             updated_at  TIMESTAMP DEFAULT NOW()
         )
     """))
     print("  ✓ companies table ready")
+
+    result = db_conn.execute(text("""
+        SELECT column_name FROM information_schema.columns
+        WHERE table_name='companies' AND column_name='product_ids'
+    """))
+    if not result.fetchone():
+        db_conn.execute(text("ALTER TABLE companies ADD COLUMN product_ids JSON DEFAULT '[]'"))
+        print("  ✓ Added companies.product_ids column")
 
     # ── Migration 1: Create roles table if it doesn't exist ───────────────────
     db_conn.execute(text("""
@@ -231,6 +240,16 @@ def run(db_conn):
         SET company_id = NULL
         WHERE id IN ('prod_acme_crm', 'prod_beta_sales', 'prod_acme_finance')
     """))
+
+    db_conn.execute(text("""
+        UPDATE companies SET product_ids = :ids
+        WHERE id = 'co_acme' AND (product_ids IS NULL OR product_ids::text = '[]')
+    """), {"ids": json.dumps(["prod_acme_crm", "prod_acme_finance"])})
+    db_conn.execute(text("""
+        UPDATE companies SET product_ids = :ids
+        WHERE id = 'co_beta' AND (product_ids IS NULL OR product_ids::text = '[]')
+    """), {"ids": json.dumps(["prod_beta_sales"])})
+    print("  ✓ Mapped demo products to demo customers")
 
     db_conn.execute(text("""
         UPDATE tickets

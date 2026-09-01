@@ -14,6 +14,36 @@ function can(user, permission) {
   return (user?.permissions || []).includes(permission);
 }
 
+const UPLOAD_ACCEPT = ".png,.jpg,.jpeg,.gif,.webp,.bmp,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.ppt,.pptx,.zip";
+
+function fmtSize(bytes) {
+  if (!bytes) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function isImageFile(file) {
+  if (file.kind === "image") return true;
+  return /\.(png|jpe?g|gif|webp|bmp)$/i.test(file.filename || "") || /\.(png|jpe?g|gif|webp|bmp)$/i.test(file.path || "");
+}
+
+function Attachment({ file }) {
+  const name = file.filename || "Attachment";
+  // Served through the authenticated download route, never as a static file.
+  const href = file.id ? `/api/files/${file.id}` : file.path;
+  if (isImageFile(file)) {
+    return h("a", { className: "attachment attachment-image", href, target: "_blank", rel: "noreferrer", title: name },
+      h("img", { src: href, alt: name, loading: "lazy" })
+    );
+  }
+  return h("a", { className: "attachment attachment-file", href, target: "_blank", rel: "noreferrer", download: name },
+    h("span", { className: "attachment-icon" }, "FILE"),
+    h("span", { className: "attachment-name" }, name),
+    file.size ? h("span", { className: "attachment-size" }, fmtSize(file.size)) : null
+  );
+}
+
 function fmtDate(value) {
   if (!value) return "Not set";
   const date = new Date(value);
@@ -108,8 +138,9 @@ function LoginPage() {
     ),
     h("div", { className: "login-visual" },
       h("div", { className: "login-visual-copy" },
-        h("h2", { style: { margin: "0 0 10px", fontSize: 28 } }, "Software support without loose ends"),
-        h("p", { style: { margin: 0, lineHeight: 1.7, color: "#d9e3f5" } }, "Every operational table includes search, filters, export controls, and paginated review. Every portal mutation asks for confirmation before it commits.")
+        h("span", { className: "login-quote-mark" }, "“"),
+        h("p", { className: "login-quote-text" }, "Reliable support is not a stroke of luck. It is the result of clear ownership, disciplined follow-through, and a system everyone can trust."),
+        h("div", { className: "login-quote-attribution" }, "Advantal Support Operations")
       )
     )
   );
@@ -438,7 +469,7 @@ function TicketsPage({ setPage, setSelectedTicket }) {
 
   return h("div", null,
     h(PageHeader, {
-      title: can(user, "tickets.view_all") ? "All Tickets" : "My Tickets",
+      title: can(user, "tickets.view_all") ? "All Tickets" : "My Product Tickets",
       subtitle: "Search, filter, export, and track software-support tickets.",
       actions: can(user, "tickets.create") ? h("button", { className: "btn btn-primary", onClick: () => setShowModal(true) }, "New Ticket") : null,
     }),
@@ -477,7 +508,9 @@ function TicketModal({ onClose, onSaved }) {
   }, [token]);
 
   const set = (key, value) => setForm((current) => ({ ...current, [key]: value }));
+  const isSuperAdmin = can(user, "companies.manage");
   const activeProducts = products.filter((product) => product.active !== false);
+  const visibleProducts = isSuperAdmin ? activeProducts : activeProducts.filter((product) => (user?.company_product_ids || []).includes(product.id));
   const chooseCustomer = (customerId) => {
     const customer = customers.find((item) => item.id === customerId);
     setForm((current) => ({ ...current, company_id: customerId, customer: customer?.name || "" }));
@@ -538,8 +571,8 @@ function TicketModal({ onClose, onSaved }) {
         customers.filter((customer) => customer.active !== false).map((customer) => h("option", { key: customer.id, value: customer.id }, customer.name))
       ) }),
       Field({ label: "Product", children: h("select", { className: "select", value: form.product_id, onChange: (e) => chooseProduct(e.target.value) },
-        h("option", { value: "" }, activeProducts.length ? "Select product" : "No active products available"),
-        activeProducts.map((product) => h("option", { key: product.id, value: product.id }, product.name))
+        h("option", { value: "" }, visibleProducts.length ? "Select product" : "No products available for this customer"),
+        visibleProducts.map((product) => h("option", { key: product.id, value: product.id }, product.name))
       ) }),
       Field({ label: "Customer", children: h("input", { className: "input", value: form.customer, readOnly: true, placeholder: "Auto-filled from logged-in user" }) }),
       Field({ label: "Priority", children: h("select", { className: "select", value: form.priority, onChange: (e) => set("priority", e.target.value) }, priorities.map((p) => h("option", { key: p, value: p }, p))) }),
@@ -571,6 +604,9 @@ function TicketDetailPage({ ticketId, setPage }) {
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState("text");
   const [file, setFile] = useState(null);
+  const [fileMode, setFileMode] = useState("attachment");
+  const [chatError, setChatError] = useState("");
+  const [sending, setSending] = useState(false);
   const [progressDraft, setProgressDraft] = useState(0);
   const endRef = useRef(null);
 
@@ -583,7 +619,8 @@ function TicketDetailPage({ ticketId, setPage }) {
 
   if (!ticketId) return h("div", null, h(PageHeader, { title: "Ticket Detail" }), h("button", { className: "btn btn-outline", onClick: () => setPage("tickets") }, "Back to Tickets"));
   if (!ticket) return h("div", null, h(PageHeader, { title: "Loading Ticket" }));
-  const canEditTicket = can(user, "tickets.edit_any") || (can(user, "tickets.edit_assigned") && ticket.assigned_to === user.id);
+  const isProductSpoc = (ticket.product_escalation_user_ids || []).includes(user.id);
+  const canEditTicket = can(user, "tickets.edit_any") || (can(user, "tickets.edit_assigned") && (ticket.assigned_to === user.id || isProductSpoc));
 
   const patchTicket = async (payload, label) => {
     const ok = await confirm({ title: label, message: `Apply this update to ${ticket.id}?`, confirmText: "Apply Update" });
@@ -593,21 +630,33 @@ function TicketDetailPage({ ticketId, setPage }) {
   };
   const send = async () => {
     if (!message.trim() && !file) return;
-    if (message.trim() && !can(user, "messages.send")) return;
-    if (file && !can(user, "signoffs.upload")) return;
-    const ok = await confirm({ title: file ? "Send Message and Upload Signoff" : "Send Message", message: `Post this ${messageType} update on ${ticket.id}?`, confirmText: "Send" });
+    if (!file && !can(user, "messages.send")) return;
+    if (file && fileMode === "signoff" && !can(user, "signoffs.upload")) return;
+    const isSignoff = file && fileMode === "signoff";
+    const title = file ? (isSignoff ? "Upload Signoff" : "Send Attachment") : "Send Message";
+    const ok = await confirm({ title, message: `Post this update on ${ticket.id}?`, confirmText: "Send" });
     if (!ok) return;
-    if (file) {
-      const fd = new FormData();
-      fd.append("file", file);
-      fd.append("description", message);
-      await api.postForm(`/tickets/${ticket.id}/signoff`, fd, token);
-      setFile(null);
+    setChatError("");
+    setSending(true);
+    try {
+      if (file) {
+        // The typed text rides along as the caption for the uploaded file.
+        const fd = new FormData();
+        fd.append("file", file);
+        fd.append("description", message);
+        await api.postForm(`/tickets/${ticket.id}/${isSignoff ? "signoff" : "attachment"}`, fd, token);
+        setFile(null);
+      } else {
+        await api.post(`/tickets/${ticket.id}/messages`, { content: message, type: messageType }, token);
+      }
+      setMessage("");
+      setMessageType("text");
+      load();
+    } catch (err) {
+      setChatError(err.message || "Unable to send this update.");
+    } finally {
+      setSending(false);
     }
-    if (message.trim()) await api.post(`/tickets/${ticket.id}/messages`, { content: message, type: messageType }, token);
-    setMessage("");
-    setMessageType("text");
-    load();
   };
 
   return h("div", null,
@@ -666,19 +715,31 @@ function TicketDetailPage({ ticketId, setPage }) {
         h("div", { className: "messages" },
           messages.map((m) => h("div", { key: m.id, className: `message ${m.user_id === user.id ? "own" : ""}` },
             h("div", { className: "message-meta" }, `${m.user_name} - ${m.role || "User"} - ${fmtDate(m.timestamp)}`),
-            h("div", { className: "message-bubble" }, m.content)
+            h("div", { className: "message-bubble" },
+              m.content && h("div", null, m.content),
+              (m.attachments || []).map((a) => h(Attachment, { key: a.id || a.path, file: a }))
+            )
           )),
           h("div", { ref: endRef })
         ),
         h("div", { className: "chat-composer" },
-          h("textarea", { className: "textarea", value: message, onChange: (e) => setMessage(e.target.value), placeholder: "Type an update..." }),
+          chatError && h("div", { className: "error" }, chatError),
+          file && h("div", { className: "composer-file" },
+            h("span", null, `${fileMode === "signoff" ? "Signoff" : "Attachment"}: ${file.name} (${fmtSize(file.size)})`),
+            h("button", { className: "btn btn-ghost btn-sm", onClick: () => setFile(null) }, "Remove")
+          ),
+          h("textarea", { className: "textarea", value: message, onChange: (e) => setMessage(e.target.value), placeholder: file ? "Add a caption (optional)..." : "Type an update..." }),
           h("div", { className: "composer-actions" },
-            h("select", { className: "select", style: { width: 140 }, value: messageType, onChange: (e) => setMessageType(e.target.value) },
+            h("select", { className: "select", style: { width: 140 }, value: messageType, disabled: Boolean(file), onChange: (e) => setMessageType(e.target.value) },
               ["text", "update", "file"].map((t) => h("option", { key: t, value: t }, t))
             ),
-            h("input", { id: "signoff-file", type: "file", disabled: !can(user, "signoffs.upload"), style: { display: "none" }, onChange: (e) => setFile(e.target.files?.[0] || null) }),
-            can(user, "signoffs.upload") && h("label", { className: "btn btn-outline", htmlFor: "signoff-file" }, file ? file.name : "Attach Signoff"),
-            h("button", { className: "btn btn-primary", disabled: !can(user, "messages.send"), onClick: send }, "Send")
+            h("input", { id: "chat-file", type: "file", accept: UPLOAD_ACCEPT, style: { display: "none" },
+              onChange: (e) => { setFile(e.target.files?.[0] || null); setFileMode("attachment"); e.target.value = ""; } }),
+            can(user, "messages.send") && h("label", { className: "btn btn-outline", htmlFor: "chat-file" }, "Attach File"),
+            h("input", { id: "signoff-file", type: "file", accept: UPLOAD_ACCEPT, style: { display: "none" },
+              onChange: (e) => { setFile(e.target.files?.[0] || null); setFileMode("signoff"); e.target.value = ""; } }),
+            can(user, "signoffs.upload") && h("label", { className: "btn btn-outline", htmlFor: "signoff-file" }, "Attach Signoff"),
+            h("button", { className: "btn btn-primary", disabled: sending || (!can(user, "messages.send") && !file), onClick: send }, sending ? "Sending..." : "Send")
           )
         )
       )
@@ -783,19 +844,31 @@ function ProductModal({ product, onClose, onSaved }) {
       Field({ label: "Product Code", children: h("input", { className: "input", value: form.code, onChange: (e) => set("code", e.target.value), placeholder: "e.g. CRM" }) }),
       Field({ label: "Status", children: h("select", { className: "select", value: form.active ? "active" : "inactive", onChange: (e) => set("active", e.target.value === "active") }, h("option", { value: "active" }, "Active"), h("option", { value: "inactive" }, "Inactive")) })
     ),
-    Field({ label: "Escalation Matrix", children: h("div", { className: "permission-grid" },
-      assignable.length ? assignable.map((person) => {
-        const selected = form.escalation_user_ids.includes(person.id);
-        return h("label", { key: person.id, className: "permission-item" },
-          h("input", { type: "checkbox", checked: selected, onChange: () => toggleEscalation(person.id) }),
-          h("span", null, person.name),
-          selected && h("div", { className: "page-actions", style: { marginLeft: "auto" } },
-            h("button", { className: "btn btn-outline btn-sm", type: "button", onClick: (e) => { e.preventDefault(); e.stopPropagation(); moveEscalation(person.id, -1); } }, "Up"),
-            h("button", { className: "btn btn-outline btn-sm", type: "button", onClick: (e) => { e.preventDefault(); e.stopPropagation(); moveEscalation(person.id, 1); } }, "Down")
+    Field({ label: "Escalation Matrix", children: (() => {
+      const selectedPeople = form.escalation_user_ids.map((id) => assignable.find((p) => p.id === id)).filter(Boolean);
+      const remainingPeople = assignable.filter((p) => !form.escalation_user_ids.includes(p.id));
+      return h("div", { className: "escalation-matrix" },
+        h("div", { className: "small muted" }, "A ticket is first routed to L1. If unresolved, it escalates to L2, then L3, and so on."),
+        h("div", { className: "escalation-chain" },
+          selectedPeople.length ? selectedPeople.map((person, index) => h("div", { key: person.id, className: "escalation-row" },
+            h("span", { className: "escalation-level" }, `L${index + 1}`),
+            h("span", { className: "escalation-name" }, person.name),
+            h("div", { className: "page-actions", style: { marginLeft: "auto" } },
+              h("button", { className: "btn btn-outline btn-sm", type: "button", title: "Move up one level", disabled: index === 0, onClick: (e) => { e.preventDefault(); moveEscalation(person.id, -1); } }, "↑ Move Up"),
+              h("button", { className: "btn btn-outline btn-sm", type: "button", title: "Move down one level", disabled: index === selectedPeople.length - 1, onClick: (e) => { e.preventDefault(); moveEscalation(person.id, 1); } }, "↓ Move Down"),
+              h("button", { className: "btn btn-outline btn-sm", type: "button", title: "Remove from escalation chain", onClick: (e) => { e.preventDefault(); toggleEscalation(person.id); } }, "Remove")
+            )
+          )) : h("div", { className: "small muted" }, "No escalation levels configured yet. Add people below to build the chain.")
+        ),
+        remainingPeople.length > 0 && h("div", { className: "escalation-pool" },
+          h("div", { className: "small muted", style: { marginBottom: "8px", fontWeight: 700 } }, "Add to escalation chain:"),
+          h("div", { className: "escalation-pool-list" },
+            remainingPeople.map((person) => h("button", { key: person.id, type: "button", className: "btn btn-outline btn-sm", onClick: (e) => { e.preventDefault(); toggleEscalation(person.id); } }, `+ ${person.name}`))
           )
-        );
-      }) : h("div", { className: "small muted" }, "No active SPOC users found.")
-    ) })
+        ),
+        assignable.length === 0 && h("div", { className: "small muted" }, "No active SPOC users found.")
+      );
+    })() })
   );
 }
 
@@ -835,9 +908,20 @@ function CustomerModal({ customer, onClose, onSaved }) {
   const { token } = useAuth();
   const confirm = useConfirm();
   const isEdit = Boolean(customer);
-  const [form, setForm] = useState({ name: customer?.name || "", code: customer?.code || "", active: customer?.active !== false });
+  const [products, setProducts] = useState([]);
+  const [form, setForm] = useState({ name: customer?.name || "", code: customer?.code || "", product_ids: customer?.product_ids || [], active: customer?.active !== false });
   const [error, setError] = useState("");
   const set = (key, value) => setForm((current) => ({ ...current, [key]: value }));
+  const toggleProduct = (productId) => {
+    set("product_ids", form.product_ids.includes(productId)
+      ? form.product_ids.filter((id) => id !== productId)
+      : [...form.product_ids, productId]);
+  };
+
+  useEffect(() => {
+    api.get("/products", token).then(setProducts).catch(() => setProducts([]));
+  }, [token]);
+
   const submit = async () => {
     const ok = await confirm({ title: isEdit ? "Save Customer" : "Create Customer", message: `${isEdit ? "Save changes for" : "Create"} customer ${form.name || "Untitled"}?`, confirmText: isEdit ? "Save" : "Create" });
     if (!ok) return;
@@ -860,7 +944,16 @@ function CustomerModal({ customer, onClose, onSaved }) {
       Field({ label: "Customer Name", children: h("input", { className: "input", value: form.name, onChange: (e) => set("name", e.target.value), placeholder: "Customer name" }) }),
       Field({ label: "Customer Code", children: h("input", { className: "input", value: form.code, onChange: (e) => set("code", e.target.value), placeholder: "e.g. ACME" }) }),
       Field({ label: "Status", children: h("select", { className: "select", value: form.active ? "active" : "inactive", onChange: (e) => set("active", e.target.value === "active") }, h("option", { value: "active" }, "Active"), h("option", { value: "inactive" }, "Inactive")) })
-    )
+    ),
+    Field({ label: "Products", children: h("div", null,
+      h("div", { className: "small muted", style: { marginBottom: "8px" } }, "Only the products checked here will be selectable when this customer creates a ticket."),
+      h("div", { className: "permission-grid" },
+        products.length ? products.map((product) => h("label", { key: product.id, className: "permission-item" },
+          h("input", { type: "checkbox", checked: form.product_ids.includes(product.id), onChange: () => toggleProduct(product.id) }),
+          h("span", null, product.name)
+        )) : h("div", { className: "small muted" }, "No products available yet.")
+      )
+    ) })
   );
 }
 

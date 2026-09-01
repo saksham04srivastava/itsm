@@ -28,8 +28,9 @@ services:
     container_name: fieldops-backend
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql://fieldops:${DB_PASSWORD:-fieldops123}@db:5432/fieldops
-      SECRET_KEY:   ${SECRET_KEY:-change-me-in-production-use-a-long-random-string}
+      DATABASE_URL:  postgresql://fieldops:${DB_PASSWORD:-fieldops123}@db:5432/fieldops
+      SECRET_KEY:    ${SECRET_KEY:-change-me-in-production-use-a-long-random-string}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
     volumes:
       - uploads_data:/app/uploads
     networks:

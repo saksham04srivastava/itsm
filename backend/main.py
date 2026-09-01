@@ -1,13 +1,15 @@
-from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form, Query
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timedelta
 from jose import JWTError, jwt
+from sqlalchemy import and_, cast, or_, Text
 from sqlalchemy.orm import Session, joinedload
-import bcrypt, uuid, os, shutil, time
+from sqlalchemy.orm.attributes import flag_modified
+import bcrypt, uuid, os, shutil, time, mimetypes
 
 from database import engine, get_db, Base
 from models import Company, Product, Role, User, Ticket, Message, Signoff, ALL_PERMISSIONS, PERMISSION_GROUPS
@@ -41,13 +43,28 @@ app = FastAPI(title="Advantal Support API", version="3.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
                    allow_methods=["*"], allow_headers=["*"])
 
-os.makedirs("uploads", exist_ok=True)
-app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+# Uploads are NOT served as static files: every file is delivered through the
+# authenticated /api/files/{id} route so ticket access is enforced per download.
+# The slim image has no Office mime mappings, so those downloads would be served
+# as text/plain without this.
+mimetypes.add_type("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xlsx")
+mimetypes.add_type("application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".docx")
+mimetypes.add_type("application/vnd.openxmlformats-officedocument.presentationml.presentation", ".pptx")
+mimetypes.add_type("application/msword", ".doc")
+mimetypes.add_type("application/vnd.ms-excel", ".xls")
 
 SECRET_KEY = os.environ.get("SECRET_KEY", "change-me-in-production")
 ALGORITHM  = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
 security = HTTPBearer()
+
+# Cookie used only so the browser can open authenticated file downloads. It is
+# scoped to /api/files, so it is never sent to any state-changing endpoint.
+SESSION_COOKIE = "advantal_session"
+SESSION_COOKIE_PATH = "/api/files"
+COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "false").lower() == "true"
 
 @app.get("/health")
 def health(): return {"status": "ok"}
@@ -59,10 +76,9 @@ def create_token(data):
     exp = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     return jwt.encode({**data, "exp": exp}, SECRET_KEY, algorithm=ALGORITHM)
 
-def get_current_user(creds: HTTPAuthorizationCredentials = Depends(security),
-                     db: Session = Depends(get_db)) -> User:
+def user_from_token(token: str, db: Session) -> User:
     try:
-        payload = jwt.decode(creds.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email = payload.get("sub")
         if not email: raise HTTPException(401, "Invalid token")
         user = db.query(User).options(joinedload(User.role_obj), joinedload(User.company)).filter(User.email == email).first()
@@ -71,6 +87,21 @@ def get_current_user(creds: HTTPAuthorizationCredentials = Depends(security),
         return user
     except JWTError:
         raise HTTPException(401, "Invalid token")
+
+def get_current_user(creds: HTTPAuthorizationCredentials = Depends(security),
+                     db: Session = Depends(get_db)) -> User:
+    return user_from_token(creds.credentials, db)
+
+def get_download_user(request: Request, db: Session = Depends(get_db)) -> User:
+    """Downloads are opened by the browser (<img>, <a>), which cannot send an
+    Authorization header, so the session cookie set at login is accepted too.
+    That cookie is scoped to this route only, so it can never be replayed
+    against a state-changing endpoint."""
+    auth = request.headers.get("Authorization", "")
+    token = auth[7:] if auth.startswith("Bearer ") else request.cookies.get(SESSION_COOKIE)
+    if not token:
+        raise HTTPException(401, "Authentication required")
+    return user_from_token(token, db)
 
 def require_perm(perm: str):
     def checker(user: User = Depends(get_current_user)):
@@ -88,13 +119,25 @@ def scoped_users_query(db: Session, user: User):
         q = q.filter(User.company_id == user.company_id)
     return q
 
+def product_ids_with_escalation_user(db: Session, user_id: str) -> List[str]:
+    return [p.id for p in db.query(Product.id, Product.escalation_user_ids)
+            if user_id in (p.escalation_user_ids or [])]
+
 def scoped_tickets_query(db: Session, user: User):
+    """A ticket is visible when any of these hold (super admins see everything):
+    it is assigned to the user, the user raised it, the user is on the escalation
+    matrix of its product (SPOCs support their products across every customer),
+    or the user may view all tickets of their own customer."""
     q = db.query(Ticket).options(joinedload(Ticket.company), joinedload(Ticket.product))
-    if not is_super_admin(user):
-        q = q.filter(Ticket.company_id == user.company_id)
-    if not user.can("tickets.view_all"):
-        q = q.filter(Ticket.assigned_to == user.id)
-    return q
+    if is_super_admin(user):
+        return q
+    clauses = [Ticket.assigned_to == user.id, Ticket.created_by == user.id]
+    product_ids = product_ids_with_escalation_user(db, user.id)
+    if product_ids:
+        clauses.append(Ticket.product_id.in_(product_ids))
+    if user.can("tickets.view_all"):
+        clauses.append(and_(Ticket.company_id == user.company_id, Ticket.company_id.isnot(None)))
+    return q.filter(or_(*clauses))
 
 def scoped_products_query(db: Session, user: User, active_only: bool = False):
     q = db.query(Product)
@@ -102,12 +145,28 @@ def scoped_products_query(db: Session, user: User, active_only: bool = False):
         q = q.filter(Product.active == True)
     return q
 
+def is_product_spoc(user: User, ticket: Ticket) -> bool:
+    """True when the user sits on the escalation matrix of the ticket's product."""
+    return bool(ticket.product) and user.id in (ticket.product.escalation_user_ids or [])
+
 def can_access_ticket(user: User, ticket: Ticket) -> bool:
+    """Mirrors the scopes in scoped_tickets_query for a single ticket."""
     if is_super_admin(user):
         return True
-    if ticket.company_id != user.company_id:
+    if ticket.assigned_to == user.id or ticket.created_by == user.id:
+        return True
+    if is_product_spoc(user, ticket):
+        return True
+    return bool(user.can("tickets.view_all") and user.company_id and ticket.company_id == user.company_id)
+
+def can_edit_ticket(user: User, ticket: Ticket) -> bool:
+    """Every SPOC on the product's escalation matrix works the ticket, not just
+    the level it currently sits with."""
+    if is_super_admin(user) or user.can("tickets.edit_any"):
+        return True
+    if not user.can("tickets.edit_assigned"):
         return False
-    return user.can("tickets.view_all") or ticket.assigned_to == user.id
+    return ticket.assigned_to == user.id or is_product_spoc(user, ticket)
 
 def require_ticket_access(ticket: Ticket, user: User):
     if not can_access_ticket(user, ticket):
@@ -134,12 +193,71 @@ def validate_escalation_users(db: Session, user_ids: List[str]) -> List[str]:
             raise HTTPException(400, f"{escalation_user.name} cannot own assigned tickets")
     return ordered_ids
 
+def validate_product_ids(db: Session, product_ids: List[str]) -> List[str]:
+    ordered_ids = list(dict.fromkeys([pid for pid in product_ids if pid]))
+    if not ordered_ids:
+        return []
+    existing = {p.id for p in db.query(Product.id).filter(Product.id.in_(ordered_ids)).all()}
+    missing = [pid for pid in ordered_ids if pid not in existing]
+    if missing:
+        raise HTTPException(400, f"Invalid product(s): {', '.join(missing)}")
+    return ordered_ids
+
 def resolve_product_assignee(db: Session, product: Product) -> str:
     for user_id in product.escalation_user_ids or []:
         escalation_user = db.query(User).options(joinedload(User.role_obj)).filter(User.id == user_id, User.active == True).first()
         if escalation_user and "tickets.edit_assigned" in (escalation_user.permissions or []):
             return escalation_user.id
     raise HTTPException(400, "Selected product has no active escalation owner")
+
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+DOCUMENT_EXTENSIONS = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".txt", ".ppt", ".pptx", ".zip"}
+ALLOWED_UPLOAD_EXTENSIONS = IMAGE_EXTENSIONS | DOCUMENT_EXTENSIONS
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+
+def save_upload(file: UploadFile) -> dict:
+    """Validate and store one uploaded file, returning its stored metadata."""
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in ALLOWED_UPLOAD_EXTENSIONS:
+        allowed = ", ".join(sorted(ALLOWED_UPLOAD_EXTENSIONS))
+        raise HTTPException(400, f"Unsupported file type '{ext or 'unknown'}'. Allowed: {allowed}")
+    fid = str(uuid.uuid4())
+    path = os.path.join(UPLOAD_DIR, f"{fid}{ext}")
+    with open(path, "wb") as f_out:
+        shutil.copyfileobj(file.file, f_out)
+    size = os.path.getsize(path)
+    if size > MAX_UPLOAD_BYTES:
+        os.remove(path)
+        raise HTTPException(413, f"File is larger than the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit")
+    return {"id": fid, "path": f"/api/files/{fid}", "size": size, "ext": ext}
+
+def find_upload_path(file_id: str) -> Optional[str]:
+    """Locate a stored upload by id. Only names actually present in the upload
+    directory are used, so the id can never escape it."""
+    try:
+        uuid.UUID(file_id)
+    except ValueError:
+        return None
+    for name in os.listdir(UPLOAD_DIR):
+        if os.path.splitext(name)[0] == file_id:
+            return os.path.join(UPLOAD_DIR, name)
+    return None
+
+def resolve_upload(db: Session, file_id: str):
+    """Return (ticket, original filename) for a stored file, so downloads can be
+    authorised against the ticket the file belongs to."""
+    s = db.query(Signoff).filter(Signoff.id == file_id).first()
+    if s:
+        ticket = db.query(Ticket).options(joinedload(Ticket.product)).filter(Ticket.id == s.ticket_id).first()
+        return ticket, s.filename
+    m = (db.query(Message)
+           .filter(Message.type == "file", cast(Message.attachments, Text).like(f'%"{file_id}"%'))
+           .first())
+    if m:
+        ticket = db.query(Ticket).options(joinedload(Ticket.product)).filter(Ticket.id == m.ticket_id).first()
+        name = next((a.get("filename") for a in (m.attachments or []) if a.get("id") == file_id), None)
+        return ticket, name
+    return None, None
 
 def ticket_code(value: str, fallback: str) -> str:
     raw = (value or fallback or "NA").upper()
@@ -164,6 +282,7 @@ def next_ticket_id(db: Session, company: Company, product: Product, created_at: 
 def ser_company(c: Company) -> dict:
     return {
         "id": c.id, "name": c.name, "code": c.code,
+        "product_ids": c.product_ids or [],
         "active": True if c.active is None else c.active,
         "created_at": c.created_at.isoformat() if c.created_at else "",
         "updated_at": c.updated_at.isoformat() if c.updated_at else "",
@@ -188,6 +307,7 @@ def ser_user(u: User) -> dict:
         "role_color": u.role_obj.color if u.role_obj else "#8b93b0",
         "company_id": u.company_id,
         "company_name": u.company.name if u.company else "",
+        "company_product_ids": (u.company.product_ids or []) if u.company else [],
         "permissions": u.permissions,
         "phone": u.phone or "", "skills": u.skills or "",
         "avatar": u.avatar or u.name[0].upper(),
@@ -221,6 +341,7 @@ def ser_ticket(t: Ticket) -> dict:
         "company_name": t.company.name if t.company else t.customer,
         "product_id": t.product_id,
         "product_name": t.product.name if t.product else "",
+        "product_escalation_user_ids": (t.product.escalation_user_ids or []) if t.product else [],
         "assigned_to": t.assigned_to,
         "status": t.status, "priority": t.priority, "type": t.type,
         "progress": t.progress, "due_date": t.due_date,
@@ -254,10 +375,12 @@ class LoginRequest(BaseModel):
 class CompanyCreate(BaseModel):
     name: str
     code: Optional[str] = ""
+    product_ids: List[str] = []
 
 class CompanyUpdate(BaseModel):
     name: Optional[str] = None
     code: Optional[str] = None
+    product_ids: Optional[List[str]] = None
     active: Optional[bool] = None
 
 class ProductCreate(BaseModel):
@@ -319,18 +442,44 @@ class MessageCreate(BaseModel):
 # AUTH
 # ══════════════════════════════════════════════════════════════════════════════
 @app.post("/api/auth/login")
-def login(req: LoginRequest, db: Session = Depends(get_db)):
+def login(req: LoginRequest, response: Response, db: Session = Depends(get_db)):
     user = db.query(User).options(joinedload(User.role_obj), joinedload(User.company)).filter(User.email == req.email).first()
     if not user or not verify_password(req.password, user.hashed_password):
         raise HTTPException(401, "Invalid credentials")
     if not user.active:
         raise HTTPException(403, "Account inactive. Contact admin.")
-    return {"access_token": create_token({"sub": user.email}),
-            "token_type": "bearer", "user": ser_user(user)}
+    token = create_token({"sub": user.email})
+    response.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="lax",
+                        secure=COOKIE_SECURE, path=SESSION_COOKIE_PATH,
+                        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60)
+    return {"access_token": token, "token_type": "bearer", "user": ser_user(user)}
+
+@app.post("/api/auth/logout")
+def logout(response: Response):
+    response.delete_cookie(SESSION_COOKIE, path=SESSION_COOKIE_PATH)
+    return {"message": "Logged out"}
 
 @app.get("/api/auth/me")
 def get_me(user: User = Depends(get_current_user)):
     return ser_user(user)
+
+@app.get("/api/files/{file_id}")
+def download_file(file_id: str, user: User = Depends(get_download_user), db: Session = Depends(get_db)):
+    """Authenticated file download, authorised against the file's own ticket."""
+    path = find_upload_path(file_id)
+    ticket, filename = resolve_upload(db, file_id)
+    if not path or not ticket:
+        raise HTTPException(404, "File not found")
+    require_ticket_access(ticket, user)
+    filename = filename or os.path.basename(path)
+    ext = os.path.splitext(path)[1].lower()
+    return FileResponse(
+        path,
+        filename=filename,
+        media_type=mimetypes.guess_type(filename)[0] or "application/octet-stream",
+        # Images and PDFs render in place; everything else downloads.
+        content_disposition_type="inline" if ext in IMAGE_EXTENSIONS or ext == ".pdf" else "attachment",
+    )
 
 # ══════════════════════════════════════════════════════════════════════════════
 # COMPANIES
@@ -351,6 +500,7 @@ def create_company(payload: CompanyCreate, user: User = Depends(require_perm("co
     if db.query(Company).filter(Company.code == code).first():
         raise HTTPException(409, "Company code already exists")
     company = Company(id=f"co_{uuid.uuid4().hex[:8]}", name=name, code=code,
+                      product_ids=validate_product_ids(db, payload.product_ids),
                       active=True, created_at=datetime.utcnow())
     db.add(company)
     db.commit()
@@ -376,6 +526,8 @@ def update_company(company_id: str, payload: CompanyUpdate, user: User = Depends
         if db.query(Company).filter(Company.code == code, Company.id != company_id).first():
             raise HTTPException(409, "Company code already exists")
         company.code = code
+    if payload.product_ids is not None:
+        company.product_ids = validate_product_ids(db, payload.product_ids)
     if payload.active is not None:
         company.active = payload.active
     company.updated_at = datetime.utcnow()
@@ -637,6 +789,8 @@ def create_ticket(payload: TicketCreate, user: User = Depends(require_perm("tick
     company = db.query(Company).filter(Company.id == company_id, Company.active == True).first()
     if not company or not company.active:
         raise HTTPException(400, "Invalid company_id")
+    if not is_super_admin(user) and product.id not in (company.product_ids or []):
+        raise HTTPException(400, "Selected product is not available for this customer")
     assigned_to = resolve_product_assignee(db, product)
     created_at = datetime.utcnow()
     tid = next_ticket_id(db, company, product, created_at)
@@ -657,19 +811,21 @@ def create_ticket(payload: TicketCreate, user: User = Depends(require_perm("tick
 def update_ticket(ticket_id: str, payload: TicketUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     t = db.query(Ticket).options(joinedload(Ticket.company), joinedload(Ticket.product)).filter(Ticket.id == ticket_id).first()
     if not t: raise HTTPException(404, "Ticket not found")
-    if not is_super_admin(user) and t.company_id != user.company_id:
-        raise HTTPException(403, "Access denied")
-    can_edit_any = user.can("tickets.edit_any")
-    can_edit_own = user.can("tickets.edit_assigned") and t.assigned_to == user.id
-    if not can_edit_any and not can_edit_own:
+    require_ticket_access(t, user)
+    if not can_edit_ticket(user, t):
         raise HTTPException(403, "No permission to edit this ticket")
     if payload.status is not None: t.status = payload.status
     if payload.progress is not None: t.progress = payload.progress
     if payload.milestone_id is not None and payload.milestone_done is not None:
-        ms = list(t.milestones or [])
+        # Copy each milestone: mutating the loaded dicts in place leaves the new
+        # value equal to the committed one, so SQLAlchemy emits no UPDATE.
+        ms = [dict(m) for m in (t.milestones or [])]
+        if not any(m.get("id") == payload.milestone_id for m in ms):
+            raise HTTPException(404, "Milestone not found on this ticket")
         for m in ms:
-            if m["id"] == payload.milestone_id: m["done"] = payload.milestone_done
+            if m.get("id") == payload.milestone_id: m["done"] = payload.milestone_done
         t.milestones = ms
+        flag_modified(t, "milestones")
     t.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(t)
@@ -677,10 +833,9 @@ def update_ticket(ticket_id: str, payload: TicketUpdate, user: User = Depends(ge
 
 @app.delete("/api/tickets/{ticket_id}")
 def delete_ticket(ticket_id: str, user: User = Depends(require_perm("tickets.delete")), db: Session = Depends(get_db)):
-    t = db.query(Ticket).filter(Ticket.id == ticket_id).first()
+    t = db.query(Ticket).options(joinedload(Ticket.product)).filter(Ticket.id == ticket_id).first()
     if not t: raise HTTPException(404, "Ticket not found")
-    if not is_super_admin(user) and t.company_id != user.company_id:
-        raise HTTPException(403, "Access denied")
+    require_ticket_access(t, user)
     db.delete(t)
     db.commit()
     return {"message": "Deleted"}
@@ -710,6 +865,31 @@ def post_message(ticket_id: str, payload: MessageCreate, user: User = Depends(re
     db.refresh(m)
     return ser_message(m)
 
+@app.post("/api/tickets/{ticket_id}/attachment")
+async def upload_attachment(ticket_id: str, file: UploadFile = File(...),
+                            description: str = Form(""),
+                            user: User = Depends(require_perm("messages.send")),
+                            db: Session = Depends(get_db)):
+    """Attach an image or document to the conversation. Unlike a signoff this is
+    a plain chat attachment and is not added to the signoff register."""
+    t = db.query(Ticket).options(joinedload(Ticket.product)).filter(Ticket.id == ticket_id).first()
+    if not t: raise HTTPException(404, "Ticket not found")
+    require_ticket_access(t, user)
+    saved = save_upload(file)
+    attachment = {
+        "id": saved["id"], "filename": file.filename, "path": saved["path"],
+        "size": saved["size"], "kind": "image" if saved["ext"] in IMAGE_EXTENSIONS else "file",
+    }
+    m = Message(id=str(uuid.uuid4()), ticket_id=ticket_id, user_id=user.id,
+                user_name=user.name, role=user.role_obj.name if user.role_obj else "",
+                content=(description or "").strip(), type="file",
+                timestamp=datetime.utcnow(), attachments=[attachment])
+    t.updated_at = datetime.utcnow()
+    db.add(m)
+    db.commit()
+    db.refresh(m)
+    return ser_message(m)
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SIGNOFFS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -718,18 +898,15 @@ async def upload_signoff(ticket_id: str, file: UploadFile = File(...),
                           description: str = Form(""),
                           user: User = Depends(require_perm("signoffs.upload")),
                           db: Session = Depends(get_db)):
-    t = db.query(Ticket).filter(Ticket.id == ticket_id).first()
+    t = db.query(Ticket).options(joinedload(Ticket.product)).filter(Ticket.id == ticket_id).first()
     if not t: raise HTTPException(404, "Ticket not found")
     require_ticket_access(t, user)
-    fid = str(uuid.uuid4())
-    ext = os.path.splitext(file.filename)[1]
-    path = f"uploads/{fid}{ext}"
-    with open(path, "wb") as f_out: shutil.copyfileobj(file.file, f_out)
-    s = Signoff(id=fid, ticket_id=ticket_id, filename=file.filename,
-                path=f"/uploads/{fid}{ext}", description=description,
+    saved = save_upload(file)
+    s = Signoff(id=saved["id"], ticket_id=ticket_id, filename=file.filename,
+                path=saved["path"], description=description,
                 uploaded_by=user.name, uploaded_by_id=user.id,
                 role=user.role_obj.name if user.role_obj else "",
-                size=os.path.getsize(path), timestamp=datetime.utcnow())
+                size=saved["size"], timestamp=datetime.utcnow())
     db.add(s)
     m = Message(id=str(uuid.uuid4()), ticket_id=ticket_id, user_id=user.id,
                 user_name=user.name, role=user.role_obj.name if user.role_obj else "",
