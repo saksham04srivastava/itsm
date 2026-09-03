@@ -7,3 +7,6 @@ pydantic==2.6.1
 sqlalchemy==2.0.28
 psycopg2-binary==2.9.9
 alembic==1.13.1
+# Pulled in transitively by python-jose[cryptography]; pinned because mailer.py
+# imports Fernet/HKDF from it directly.
+cryptography==50.0.1

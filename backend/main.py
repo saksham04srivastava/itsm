@@ -11,10 +11,17 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.orm.attributes import flag_modified
 import bcrypt, uuid, os, shutil, time, mimetypes
 
+from contextlib import asynccontextmanager
+
 from database import engine, get_db, Base
-from models import Company, Product, Role, User, Ticket, Message, Signoff, ALL_PERMISSIONS, PERMISSION_GROUPS
+from models import (Company, Product, Role, User, Ticket, Message, Signoff,
+                    EmailSettings, EmailOutbox, ALL_PERMISSIONS, PERMISSION_GROUPS)
 import seed as seed_module
 import migrate as migrate_module
+import mailer
+import email_templates as email_tpl
+import email_worker
+from notifications import get_or_create_settings, notify, sending_allowed, snapshot_ticket
 
 # ─── Init DB: create tables → migrate schema → seed ──────────────────────────
 def init_db():
@@ -39,7 +46,15 @@ finally:
     _db.close()
 
 # ─── App ──────────────────────────────────────────────────────────────────────
-app = FastAPI(title="Advantal Support API", version="3.0.0")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    email_worker.start()
+    try:
+        yield
+    finally:
+        email_worker.stop()
+
+app = FastAPI(title="Advantal Support API", version="3.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
                    allow_methods=["*"], allow_headers=["*"])
 
@@ -359,6 +374,57 @@ def ser_message(m: Message) -> dict:
         "attachments": m.attachments or [],
     }
 
+def ser_email_settings(s: EmailSettings) -> dict:
+    """Serialise SMTP settings. Deliberately has no password field of any kind."""
+    stored = s.password_ciphertext or ""
+    readable = mailer.decrypt_password(stored) is not None if stored else True
+    fingerprint_now = mailer.config_fingerprint(s)
+    return {
+        "enabled": bool(s.enabled),
+        "host": s.host or "", "port": s.port or 587,
+        "security": s.security or "starttls",
+        "verify_tls": True if s.verify_tls is None else bool(s.verify_tls),
+        "username": s.username or "",
+        "has_password": bool(stored),
+        "password_unreadable": bool(stored) and not readable,
+        "from_email": s.from_email or "", "from_name": s.from_name or "",
+        "reply_to": s.reply_to or "", "portal_url": s.portal_url or "",
+        "timeout_seconds": s.timeout_seconds or 20,
+        "max_attempts": s.max_attempts or 5,
+        "events": s.events or {},
+        "verified": bool(s.verified_at),
+        "verified_at": s.verified_at.isoformat() if s.verified_at else "",
+        "verified_by": s.verified_by or "", "verified_email": s.verified_email or "",
+        "config_changed_since_verify": bool(s.verified_at) and s.config_fingerprint != fingerprint_now,
+        "sending_active": sending_allowed(s),
+        "secret_key_weak": mailer.secret_key_is_weak(),
+        "event_types": email_tpl.EVENT_TYPES,
+        "updated_at": s.updated_at.isoformat() if s.updated_at else "",
+        "updated_by": s.updated_by or "",
+    }
+
+
+def ser_email_outbox(e: EmailOutbox) -> dict:
+    status = e.status or "queued"
+    return {
+        "id": e.id, "event_type": e.event_type,
+        "event_label": email_tpl.EVENT_LABELS.get(e.event_type, e.event_type),
+        "ticket_id": e.ticket_id or "",
+        "to_email": e.to_email, "to_name": e.to_name or "",
+        "audience": e.audience or "", "subject": e.subject or "",
+        # "retrying" is derived rather than stored: a queued row that has
+        # already been attempted is a retry.
+        "status": "retrying" if status == "queued" and (e.attempts or 0) > 0 else status,
+        "raw_status": status,
+        "attempts": e.attempts or 0,
+        "last_error": e.last_error or "",
+        "next_attempt_at": e.next_attempt_at.isoformat() if e.next_attempt_at else "",
+        "sent_at": e.sent_at.isoformat() if e.sent_at else "",
+        "actor_name": e.actor_name or "",
+        "created_at": e.created_at.isoformat() if e.created_at else "",
+    }
+
+
 def ser_signoff(s: Signoff) -> dict:
     return {
         "id": s.id, "ticket_id": s.ticket_id, "filename": s.filename,
@@ -437,6 +503,27 @@ class TicketUpdate(BaseModel):
 
 class MessageCreate(BaseModel):
     content: str; type: str = "text"
+
+class EmailSettingsUpdate(BaseModel):
+    enabled: Optional[bool] = None
+    host: Optional[str] = None
+    port: Optional[int] = None
+    security: Optional[str] = None
+    verify_tls: Optional[bool] = None
+    username: Optional[str] = None
+    # None = leave unchanged, "" = clear, anything else = set. The current
+    # password is never sent to the browser, so the form can save without it.
+    password: Optional[str] = None
+    from_email: Optional[str] = None
+    from_name: Optional[str] = None
+    reply_to: Optional[str] = None
+    portal_url: Optional[str] = None
+    timeout_seconds: Optional[int] = None
+    max_attempts: Optional[int] = None
+    events: Optional[dict] = None
+
+class EmailTestRequest(BaseModel):
+    to: str
 
 # ══════════════════════════════════════════════════════════════════════════════
 # AUTH
@@ -805,6 +892,7 @@ def create_ticket(payload: TicketCreate, user: User = Depends(require_perm("tick
     db.commit()
     db.refresh(t)
     saved = db.query(Ticket).options(joinedload(Ticket.company), joinedload(Ticket.product)).filter(Ticket.id == t.id).first()
+    notify("ticket_created", snapshot_ticket(saved), actor=user)
     return ser_ticket(saved)
 
 @app.patch("/api/tickets/{ticket_id}")
@@ -814,6 +902,10 @@ def update_ticket(ticket_id: str, payload: TicketUpdate, user: User = Depends(ge
     require_ticket_access(t, user)
     if not can_edit_ticket(user, t):
         raise HTTPException(403, "No permission to edit this ticket")
+    # Snapshot before mutating, so the notification can describe the change.
+    old_status, old_progress = t.status, t.progress
+    milestone_title, milestone_was_done = "", None
+    done_count = total_count = 0
     if payload.status is not None: t.status = payload.status
     if payload.progress is not None: t.progress = payload.progress
     if payload.milestone_id is not None and payload.milestone_done is not None:
@@ -823,21 +915,40 @@ def update_ticket(ticket_id: str, payload: TicketUpdate, user: User = Depends(ge
         if not any(m.get("id") == payload.milestone_id for m in ms):
             raise HTTPException(404, "Milestone not found on this ticket")
         for m in ms:
-            if m.get("id") == payload.milestone_id: m["done"] = payload.milestone_done
+            if m.get("id") == payload.milestone_id:
+                milestone_was_done = bool(m.get("done"))   # read before overwriting
+                milestone_title = m.get("title") or ""
+                m["done"] = payload.milestone_done
         t.milestones = ms
         flag_modified(t, "milestones")
+        total_count = len(ms)
+        done_count = sum(1 for m in ms if m.get("done"))
     t.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(t)
+
+    snap = snapshot_ticket(t)
+    if old_status != t.status or old_progress != t.progress:
+        notify("ticket_updated", snap, actor=user, extra={
+            "old_status": old_status, "new_status": t.status,
+            "old_progress": old_progress, "new_progress": t.progress,
+        })
+    if milestone_title and payload.milestone_done and not milestone_was_done:
+        notify("milestone_done", snap, actor=user, extra={
+            "milestone_title": milestone_title,
+            "done_count": done_count, "total_count": total_count,
+        })
     return ser_ticket(t)
 
 @app.delete("/api/tickets/{ticket_id}")
 def delete_ticket(ticket_id: str, user: User = Depends(require_perm("tickets.delete")), db: Session = Depends(get_db)):
-    t = db.query(Ticket).options(joinedload(Ticket.product)).filter(Ticket.id == ticket_id).first()
+    t = db.query(Ticket).options(joinedload(Ticket.product), joinedload(Ticket.company)).filter(Ticket.id == ticket_id).first()
     if not t: raise HTTPException(404, "Ticket not found")
     require_ticket_access(t, user)
+    snap = snapshot_ticket(t)          # must happen before the row is gone
     db.delete(t)
     db.commit()
+    notify("ticket_deleted", snap, actor=user)
     return {"message": "Deleted"}
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -852,7 +963,7 @@ def get_messages(ticket_id: str, user: User = Depends(require_perm("messages.vie
 
 @app.post("/api/tickets/{ticket_id}/messages")
 def post_message(ticket_id: str, payload: MessageCreate, user: User = Depends(require_perm("messages.send")), db: Session = Depends(get_db)):
-    t = db.query(Ticket).filter(Ticket.id == ticket_id).first()
+    t = db.query(Ticket).options(joinedload(Ticket.product), joinedload(Ticket.company)).filter(Ticket.id == ticket_id).first()
     if not t: raise HTTPException(404, "Ticket not found")
     require_ticket_access(t, user)
     m = Message(id=str(uuid.uuid4()), ticket_id=ticket_id, user_id=user.id,
@@ -860,9 +971,14 @@ def post_message(ticket_id: str, payload: MessageCreate, user: User = Depends(re
                 content=payload.content, type=payload.type,
                 timestamp=datetime.utcnow(), attachments=[])
     t.updated_at = datetime.utcnow()
+    snap = snapshot_ticket(t)
     db.add(m)
     db.commit()
     db.refresh(m)
+    notify("chat_message", snap, actor=user, extra={
+        "message_body": m.content or "", "message_type": m.type,
+        "author_role": user.role_obj.name if user.role_obj else "",
+    })
     return ser_message(m)
 
 @app.post("/api/tickets/{ticket_id}/attachment")
@@ -872,7 +988,7 @@ async def upload_attachment(ticket_id: str, file: UploadFile = File(...),
                             db: Session = Depends(get_db)):
     """Attach an image or document to the conversation. Unlike a signoff this is
     a plain chat attachment and is not added to the signoff register."""
-    t = db.query(Ticket).options(joinedload(Ticket.product)).filter(Ticket.id == ticket_id).first()
+    t = db.query(Ticket).options(joinedload(Ticket.product), joinedload(Ticket.company)).filter(Ticket.id == ticket_id).first()
     if not t: raise HTTPException(404, "Ticket not found")
     require_ticket_access(t, user)
     saved = save_upload(file)
@@ -885,9 +1001,15 @@ async def upload_attachment(ticket_id: str, file: UploadFile = File(...),
                 content=(description or "").strip(), type="file",
                 timestamp=datetime.utcnow(), attachments=[attachment])
     t.updated_at = datetime.utcnow()
+    snap = snapshot_ticket(t)
     db.add(m)
     db.commit()
     db.refresh(m)
+    # Only enqueues rows; SMTP never runs on the event loop.
+    notify("chat_attachment", snap, actor=user, extra={
+        "filename": file.filename or "", "size": saved["size"],
+        "caption": (description or "").strip(),
+    })
     return ser_message(m)
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -898,7 +1020,7 @@ async def upload_signoff(ticket_id: str, file: UploadFile = File(...),
                           description: str = Form(""),
                           user: User = Depends(require_perm("signoffs.upload")),
                           db: Session = Depends(get_db)):
-    t = db.query(Ticket).options(joinedload(Ticket.product)).filter(Ticket.id == ticket_id).first()
+    t = db.query(Ticket).options(joinedload(Ticket.product), joinedload(Ticket.company)).filter(Ticket.id == ticket_id).first()
     if not t: raise HTTPException(404, "Ticket not found")
     require_ticket_access(t, user)
     saved = save_upload(file)
@@ -913,9 +1035,14 @@ async def upload_signoff(ticket_id: str, file: UploadFile = File(...),
                 content=f"Uploaded signoff: {file.filename}", type="file",
                 timestamp=datetime.utcnow(), attachments=[ser_signoff(s)])
     t.updated_at = datetime.utcnow()
+    snap = snapshot_ticket(t)
     db.add(m)
     db.commit()
     db.refresh(s)
+    notify("signoff_uploaded", snap, actor=user, extra={
+        "filename": file.filename or "", "size": saved["size"],
+        "description": description or "",
+    })
     return ser_signoff(s)
 
 @app.get("/api/tickets/{ticket_id}/signoffs")
@@ -924,6 +1051,207 @@ def get_signoffs(ticket_id: str, user: User = Depends(require_perm("messages.vie
     if not t: raise HTTPException(404, "Ticket not found")
     require_ticket_access(t, user)
     return [ser_signoff(s) for s in db.query(Signoff).filter(Signoff.ticket_id == ticket_id).all()]
+
+# ══════════════════════════════════════════════════════════════════════════════
+# EMAIL NOTIFICATIONS
+# ══════════════════════════════════════════════════════════════════════════════
+SECURITY_MODES = {"starttls", "ssl", "none"}
+
+
+def _no_crlf(value: str, field: str) -> str:
+    text_value = (value or "").strip()
+    if "\r" in text_value or "\n" in text_value:
+        raise HTTPException(400, f"{field} cannot contain line breaks")
+    return text_value
+
+
+@app.get("/api/email/settings")
+def get_email_settings(user: User = Depends(require_perm("email.manage")), db: Session = Depends(get_db)):
+    return ser_email_settings(get_or_create_settings(db))
+
+
+@app.patch("/api/email/settings")
+def update_email_settings(payload: EmailSettingsUpdate,
+                          user: User = Depends(require_perm("email.manage")),
+                          db: Session = Depends(get_db)):
+    s = get_or_create_settings(db)
+    before = mailer.config_fingerprint(s)
+
+    if payload.host is not None:
+        s.host = _no_crlf(payload.host, "Host")
+    if payload.port is not None:
+        if not 1 <= int(payload.port) <= 65535:
+            raise HTTPException(400, "Port must be between 1 and 65535")
+        s.port = int(payload.port)
+    if payload.security is not None:
+        if payload.security not in SECURITY_MODES:
+            raise HTTPException(400, "Security must be one of: starttls, ssl, none")
+        s.security = payload.security
+    if payload.verify_tls is not None:
+        s.verify_tls = bool(payload.verify_tls)
+    if payload.username is not None:
+        s.username = _no_crlf(payload.username, "Username")
+    if payload.password is not None:
+        s.password_ciphertext = mailer.encrypt_password(payload.password) if payload.password else ""
+    if payload.from_email is not None:
+        addr = _no_crlf(payload.from_email, "From address")
+        if addr and not mailer.valid_address(addr):
+            raise HTTPException(400, "From address is not a valid email address")
+        s.from_email = addr
+    if payload.from_name is not None:
+        s.from_name = _no_crlf(payload.from_name, "From name")[:120]
+    if payload.reply_to is not None:
+        addr = _no_crlf(payload.reply_to, "Reply-to")
+        if addr and not mailer.valid_address(addr):
+            raise HTTPException(400, "Reply-to is not a valid email address")
+        s.reply_to = addr
+    if payload.portal_url is not None:
+        s.portal_url = _no_crlf(payload.portal_url, "Portal URL")[:500]
+    if payload.timeout_seconds is not None:
+        s.timeout_seconds = max(5, min(int(payload.timeout_seconds), 60))
+    if payload.max_attempts is not None:
+        s.max_attempts = max(1, min(int(payload.max_attempts), 10))
+    if payload.events is not None:
+        s.events = {k: bool(payload.events.get(k)) for k in email_tpl.EVENT_KEYS}
+
+    # Any change to where mail goes invalidates the verification, so a verified
+    # relay cannot be quietly repointed somewhere else.
+    if mailer.config_fingerprint(s) != before:
+        s.verified_at = None
+        s.verified_by = ""
+        s.config_fingerprint = ""
+
+    if payload.enabled is not None:
+        if payload.enabled and not s.verified_at:
+            raise HTTPException(400, "Send a successful test email before enabling notifications")
+        s.enabled = bool(payload.enabled)
+
+    if not s.host and s.enabled:
+        raise HTTPException(400, "An SMTP host is required while notifications are enabled")
+
+    s.updated_at = datetime.utcnow()
+    s.updated_by = user.id
+    db.commit()
+    db.refresh(s)
+    return ser_email_settings(s)
+
+
+@app.post("/api/email/test")
+def send_test_email(payload: EmailTestRequest,
+                    user: User = Depends(require_perm("email.manage")),
+                    db: Session = Depends(get_db)):
+    """Send one message immediately and record the outcome.
+
+    Declared as a plain def so FastAPI runs it in the threadpool - smtplib must
+    never execute on the event loop.
+    """
+    s = get_or_create_settings(db)
+    to = (payload.to or "").strip()
+    if not mailer.valid_address(to):
+        raise HTTPException(400, "Enter a valid destination email address")
+    if not (s.host or "").strip():
+        raise HTTPException(400, "Configure and save an SMTP host first")
+    if not (s.from_email or "").strip():
+        raise HTTPException(400, "Configure and save a From address first")
+
+    subject, text_body, html_body = email_tpl.render_test(s.portal_url or "")
+    now = datetime.utcnow()
+    entry = EmailOutbox(
+        id=f"em_{uuid.uuid4().hex}", event_type="test", ticket_id=None,
+        to_email=to[:254], to_name=user.name or "", to_user_id=user.id, audience="admin",
+        subject=mailer.header_safe(subject), payload={}, template_version=email_tpl.TEMPLATE_VERSION,
+        status="sending", attempts=1, next_attempt_at=now, locked_by="api-test",
+        actor_id=user.id, actor_name=user.name or "", created_at=now,
+    )
+    db.add(entry)
+    db.commit()
+
+    try:
+        mailer.send_one(s, to, user.name or "", subject, text_body, html_body,
+                        event_type="test")
+    except Exception as exc:  # noqa: BLE001 - reported to the admin, not raised
+        password = mailer.decrypt_password(s.password_ciphertext or "")
+        message, _permanent = mailer.describe_error(exc)
+        message = mailer.scrub(message, password)
+        entry.status = "failed"
+        entry.last_error = message
+        db.commit()
+        raise HTTPException(400, f"Test email failed: {message}")
+
+    entry.status = "sent"
+    entry.sent_at = datetime.utcnow()
+    s.verified_at = datetime.utcnow()
+    s.verified_by = user.id
+    s.verified_email = to
+    s.config_fingerprint = mailer.config_fingerprint(s)
+    db.commit()
+    db.refresh(s)
+    return {"message": f"Test email sent to {to}", "settings": ser_email_settings(s)}
+
+
+@app.get("/api/email/log")
+def get_email_log(status: Optional[str] = Query(None), event: Optional[str] = Query(None),
+                  ticket_id: Optional[str] = Query(None), limit: int = Query(200),
+                  user: User = Depends(require_perm("email.manage")),
+                  db: Session = Depends(get_db)):
+    q = db.query(EmailOutbox)
+    if status:
+        q = q.filter(EmailOutbox.status == status)
+    if event:
+        q = q.filter(EmailOutbox.event_type == event)
+    if ticket_id:
+        q = q.filter(EmailOutbox.ticket_id == ticket_id)
+    q = q.order_by(EmailOutbox.created_at.desc()).limit(max(1, min(limit, 500)))
+    return [ser_email_outbox(e) for e in q.all()]
+
+
+@app.get("/api/email/stats")
+def get_email_stats(user: User = Depends(require_perm("email.manage")), db: Session = Depends(get_db)):
+    counts = {"sent": 0, "queued": 0, "retrying": 0, "failed": 0, "cancelled": 0, "sending": 0}
+    rows = db.query(EmailOutbox.status, EmailOutbox.attempts).all()
+    for status, attempts in rows:
+        if status == "queued" and (attempts or 0) > 0:
+            counts["retrying"] += 1
+        elif status in counts:
+            counts[status] += 1
+    counts["total"] = len(rows)
+    return counts
+
+
+@app.post("/api/email/log/{entry_id}/retry")
+def retry_email(entry_id: str, user: User = Depends(require_perm("email.manage")),
+                db: Session = Depends(get_db)):
+    e = db.query(EmailOutbox).filter(EmailOutbox.id == entry_id).first()
+    if not e:
+        raise HTTPException(404, "Log entry not found")
+    if e.status not in ("failed", "cancelled"):
+        raise HTTPException(400, "Only failed or cancelled messages can be retried")
+    if not mailer.valid_address(e.to_email):
+        raise HTTPException(400, "This message has an invalid recipient address")
+    e.status = "queued"
+    e.attempts = 0
+    e.next_attempt_at = datetime.utcnow()
+    e.last_error = ""
+    e.locked_at = None
+    e.locked_by = ""
+    db.commit()
+    return ser_email_outbox(e)
+
+
+@app.post("/api/email/log/{entry_id}/cancel")
+def cancel_email(entry_id: str, user: User = Depends(require_perm("email.manage")),
+                 db: Session = Depends(get_db)):
+    e = db.query(EmailOutbox).filter(EmailOutbox.id == entry_id).first()
+    if not e:
+        raise HTTPException(404, "Log entry not found")
+    if e.status not in ("queued", "sending"):
+        raise HTTPException(400, "Only queued messages can be cancelled")
+    e.status = "cancelled"
+    e.last_error = f"Cancelled by {user.name}"
+    e.locked_at = None
+    e.locked_by = ""
+    db.commit()
+    return ser_email_outbox(e)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # DASHBOARD

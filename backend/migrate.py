@@ -125,6 +125,7 @@ def run(db_conn):
         "tickets.delete","tickets.assign","messages.view","messages.send",
         "signoffs.upload","signoffs.view_all","users.view","users.create",
         "users.edit","users.delete","roles.view","roles.manage","dashboard.view_all",
+        "email.manage",
     ]
 
     system_roles = [
@@ -458,6 +459,33 @@ def run(db_conn):
             print("  Added FK constraint tickets.product_id -> products.id")
         except Exception as e:
             print(f"  Could not add tickets.product_id FK (non-fatal): {e}")
+
+    # ── Email notifications ───────────────────────────────────────────────────
+    # The tables themselves are created by Base.metadata.create_all; this only
+    # seeds the singleton settings row and pins it to a single id.
+    db_conn.execute(text("""
+        INSERT INTO email_settings (id, enabled, port, security, verify_tls, from_name,
+                                    timeout_seconds, max_attempts, events, updated_at)
+        VALUES ('email_settings', FALSE, 587, 'starttls', TRUE, 'Advantal Support',
+                20, 5, '{}', (NOW() AT TIME ZONE 'UTC'))
+        ON CONFLICT (id) DO NOTHING
+    """))
+    print("  ✓ email_settings singleton ready")
+
+    singleton_check = db_conn.execute(text("""
+        SELECT constraint_name FROM information_schema.table_constraints
+        WHERE table_name='email_settings' AND constraint_type='CHECK'
+        AND constraint_name='email_settings_singleton'
+    """)).fetchone()
+    if not singleton_check:
+        try:
+            db_conn.execute(text("""
+                ALTER TABLE email_settings
+                ADD CONSTRAINT email_settings_singleton CHECK (id = 'email_settings')
+            """))
+            print("  ✓ Added email_settings singleton constraint")
+        except Exception as e:
+            print(f"  Could not add email_settings singleton constraint (non-fatal): {e}")
 
     db_conn.commit()
     print("✅ Migrations complete.")

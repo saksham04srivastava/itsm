@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, Float, Boolean, Text, ForeignKey, DateTime, JSON
+from sqlalchemy import Column, String, Integer, Float, Boolean, Text, ForeignKey, DateTime, JSON, Index
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from database import Base
@@ -33,6 +33,8 @@ ALL_PERMISSIONS = [
     "roles.manage",           # create / edit / delete roles
     # Dashboard
     "dashboard.view_all",     # see global stats (vs only own)
+    # Notifications
+    "email.manage",           # configure SMTP and read the email delivery log
 ]
 
 PERMISSION_GROUPS = {
@@ -44,6 +46,7 @@ PERMISSION_GROUPS = {
     "Users":     ["users.view","users.create","users.edit","users.delete"],
     "Roles":     ["roles.view","roles.manage"],
     "Dashboard": ["dashboard.view_all"],
+    "Notifications": ["email.manage"],
 }
 
 
@@ -182,3 +185,83 @@ class Signoff(Base):
     timestamp       = Column(DateTime, default=datetime.utcnow)
 
     ticket          = relationship("Ticket", back_populates="signoffs")
+
+
+# ─── Email notifications ─────────────────────────────────────────────────────
+EMAIL_SETTINGS_ID = "email_settings"
+
+
+class EmailSettings(Base):
+    """Single row of SMTP configuration, edited from the portal.
+
+    Sending is gated on `enabled` AND `verified_at` AND the connection fields
+    still matching `config_fingerprint`, so a verified relay cannot be silently
+    repointed somewhere else while keeping its verified badge.
+    """
+    __tablename__ = "email_settings"
+
+    id                  = Column(String, primary_key=True, default=EMAIL_SETTINGS_ID)
+    enabled             = Column(Boolean, default=False)
+
+    host                = Column(String, default="")
+    port                = Column(Integer, default=587)
+    security            = Column(String, default="starttls")   # starttls | ssl | none
+    verify_tls          = Column(Boolean, default=True)
+    username            = Column(String, default="")
+    password_ciphertext = Column(Text, default="")             # Fernet token, never serialised
+
+    from_email          = Column(String, default="")
+    from_name           = Column(String, default="Advantal Support")
+    reply_to            = Column(String, default="")
+    portal_url          = Column(String, default="")
+
+    timeout_seconds     = Column(Integer, default=20)
+    max_attempts        = Column(Integer, default=5)
+    events              = Column(JSON, default=dict)           # {event_key: bool}
+
+    verified_at         = Column(DateTime, nullable=True)
+    verified_by         = Column(String, default="")
+    verified_email      = Column(String, default="")
+    config_fingerprint  = Column(String, default="")
+
+    updated_at          = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_by          = Column(String, default="")
+
+
+class EmailOutbox(Base):
+    """One row per recipient per event: the send queue and the delivery audit log.
+
+    `ticket_id` intentionally carries no foreign key so a ticket-deleted
+    notification outlives the ticket it describes.
+    """
+    __tablename__ = "email_outbox"
+
+    id               = Column(String, primary_key=True)
+    event_type       = Column(String, nullable=False, index=True)
+    ticket_id        = Column(String, nullable=True, index=True)
+
+    to_email         = Column(String, nullable=False)
+    to_name          = Column(String, default="")
+    to_user_id       = Column(String, nullable=True)
+    audience         = Column(String, default="")              # customer | spoc | admin
+
+    subject          = Column(String, default="")
+    payload          = Column(JSON, default=dict)              # template variables
+    template_version = Column(String, default="v1")
+
+    status           = Column(String, default="queued", index=True)  # queued|sending|sent|failed|cancelled
+    attempts         = Column(Integer, default=0)
+    next_attempt_at  = Column(DateTime, default=datetime.utcnow)
+    last_error       = Column(Text, default="")
+
+    locked_at        = Column(DateTime, nullable=True)
+    locked_by        = Column(String, default="")
+    sent_at          = Column(DateTime, nullable=True)
+
+    actor_id         = Column(String, default="")
+    actor_name       = Column(String, default="")
+    created_at       = Column(DateTime, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        Index("ix_email_outbox_dispatch", "status", "next_attempt_at"),
+    )

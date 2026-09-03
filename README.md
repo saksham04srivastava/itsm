@@ -185,6 +185,45 @@ docker exec fieldops-db psql -U fieldops -d fieldops -c "DELETE FROM messages WH
 
 This deletes only files currently referenced by signoff report rows, then removes the report records and their related upload messages.
 
+## Email Notifications
+
+Ticket activity can be emailed to the customer and to the product's SPOCs. SMTP
+is configured from the portal itself under **Notifications** (Super Admin only),
+not through environment variables.
+
+Setup order matters, because sending is gated on a verified configuration:
+
+1. Enter the SMTP host, port, security, credentials and From address, then **Save Changes**.
+2. **Send Test Email**. Only a successful test marks the configuration verified.
+3. Tick **Send notifications** and choose which events should notify.
+
+Changing any connection setting clears the verification, so a verified server
+cannot be silently repointed elsewhere. The password is encrypted before storage
+and is never sent back to the browser.
+
+Recipients for every event are all active users of the ticket's customer plus
+every active SPOC on the product's escalation matrix. Each message goes to a
+single recipient — never Cc or Bcc — so customers never see each other's
+addresses. Uploaded files are named in the email but never attached; recipients
+sign in to the portal to download them.
+
+Delivery is queued rather than sent inside the request, so a slow or unreachable
+mail server never delays a ticket operation. Failures retry with exponential
+backoff and every attempt is recorded in the **Delivery Log** on the same page,
+where a failed message can be retried by hand.
+
+### Testing notifications locally
+
+A Mailpit catcher is included behind a compose profile so it never starts in
+production:
+
+```powershell
+docker compose --profile mail up -d
+```
+
+Configure the portal with host `mailpit`, port `1025`, security `None`, and read
+the captured mail at `http://localhost:8025`.
+
 ## API Notes
 
 The frontend reaches the backend through Nginx:

@@ -156,6 +156,7 @@ function Sidebar({ page, setPage }) {
     ...(can(user, "signoffs.view_all") || can(user, "signoffs.upload") ? [{ id: "signoffs", icon: "SO", label: "Signoffs" }] : []),
     ...(can(user, "users.view") ? [{ id: "users", icon: "US", label: "Users" }] : []),
     ...(can(user, "roles.view") ? [{ id: "roles", icon: "RL", label: "Roles" }] : []),
+    ...(can(user, "email.manage") ? [{ id: "notifications", icon: "NT", label: "Notifications" }] : []),
   ];
   return h("aside", { className: "sidebar" },
     h("div", { className: "brand-lockup" },
@@ -195,6 +196,7 @@ function Shell({ page, setPage, children }) {
     signoffs: "Signoffs",
     users: "User Management",
     roles: "Roles & Permissions",
+    notifications: "Email Notifications",
   };
   const doLogout = async () => {
     const ok = await confirm({ title: "Sign Out", message: "Sign out of the portal?", confirmText: "Sign Out" });
@@ -1198,6 +1200,244 @@ function RoleModal({ role, permissions, groups, onClose, onSaved }) {
   );
 }
 
+function NotificationsPage() {
+  const { token, user } = useAuth();
+  const confirm = useConfirm();
+  const [settings, setSettings] = useState(null);
+  const [form, setForm] = useState(null);
+  const [log, setLog] = useState([]);
+  const [stats, setStats] = useState({});
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testTo, setTestTo] = useState(user?.email || "");
+
+  const loadLog = () => Promise.all([
+    api.get("/email/log?limit=200", token).then(setLog).catch(() => setLog([])),
+    api.get("/email/stats", token).then(setStats).catch(() => setStats({})),
+  ]);
+
+  const load = () => api.get("/email/settings", token).then((data) => {
+    setSettings(data);
+    // password is never sent to the browser; null means "leave unchanged"
+    setForm({
+      host: data.host, port: data.port, security: data.security, verify_tls: data.verify_tls,
+      username: data.username, password: null, from_email: data.from_email,
+      from_name: data.from_name, reply_to: data.reply_to, portal_url: data.portal_url,
+      timeout_seconds: data.timeout_seconds, max_attempts: data.max_attempts,
+      events: { ...(data.events || {}) },
+    });
+  });
+
+  useEffect(() => { load().catch((err) => setError(err.message)); loadLog(); }, [token]);
+
+  if (!can(user, "email.manage")) {
+    return h("div", null, h(PageHeader, { title: "Email Notifications", subtitle: "You do not have access to this page." }));
+  }
+  if (!settings || !form) return h("div", null, h(PageHeader, { title: "Email Notifications" }));
+
+  const set = (key, value) => { setForm((c) => ({ ...c, [key]: value })); setNotice(""); };
+  const toggleEvent = (key) => setForm((c) => ({ ...c, events: { ...c.events, [key]: !c.events[key] } }));
+
+  const save = async (extra = {}) => {
+    const ok = await confirm({ title: "Save Email Settings", message: "Apply these SMTP settings?", confirmText: "Save" });
+    if (!ok) return;
+    setError(""); setNotice(""); setSaving(true);
+    try {
+      const payload = { ...form, ...extra };
+      if (payload.password === null) delete payload.password;
+      const data = await api.patch("/email/settings", payload, token);
+      setSettings(data);
+      setForm((c) => ({ ...c, password: null, events: { ...(data.events || {}) } }));
+      setNotice("Settings saved.");
+    } catch (err) { setError(err.message); } finally { setSaving(false); }
+  };
+
+  const sendTest = async () => {
+    const ok = await confirm({ title: "Send Test Email", message: `Send a test message to ${testTo}?`, confirmText: "Send Test" });
+    if (!ok) return;
+    setError(""); setNotice(""); setTesting(true);
+    try {
+      const res = await api.post("/email/test", { to: testTo }, token);
+      setSettings(res.settings);
+      setNotice(`${res.message}. Notifications can now be enabled.`);
+      loadLog();
+    } catch (err) { setError(err.message); } finally { setTesting(false); }
+  };
+
+  const setEnabled = async (value) => {
+    const ok = await confirm({
+      title: value ? "Enable Notifications" : "Pause Notifications",
+      message: value ? "Start sending activity emails to customers and SPOCs?" : "Stop sending all activity emails?",
+      confirmText: value ? "Enable" : "Pause", tone: value ? "primary" : "danger",
+    });
+    if (!ok) return;
+    setError(""); setNotice("");
+    try {
+      const data = await api.patch("/email/settings", { enabled: value }, token);
+      setSettings(data);
+      setNotice(value ? "Notifications are now active." : "Notifications paused.");
+    } catch (err) { setError(err.message); }
+  };
+
+  const retry = async (row) => {
+    const ok = await confirm({ title: "Retry Email", message: `Queue another delivery attempt to ${row.to_email}?`, confirmText: "Retry" });
+    if (!ok) return;
+    try { await api.post(`/email/log/${row.id}/retry`, {}, token); loadLog(); }
+    catch (err) { setError(err.message); }
+  };
+
+  // Banner reflects exactly why mail is or is not flowing.
+  let banner = null;
+  if (settings.password_unreadable) {
+    banner = h("div", { className: "warn" }, "The stored SMTP password cannot be read, most likely because SECRET_KEY changed. Re-enter the password and send a new test email.");
+  } else if (!settings.verified) {
+    banner = h("div", { className: "warn" }, "Notifications are paused. Save your SMTP details, then send a test email to verify them before enabling.");
+  } else if (settings.config_changed_since_verify) {
+    banner = h("div", { className: "warn" }, "Connection settings have changed since the last successful test. Send another test email to re-verify.");
+  } else if (settings.sending_active) {
+    banner = h("div", { className: "success" }, `Verified ${fmtDate(settings.verified_at)} via ${settings.verified_email}. Notifications are active.`);
+  } else {
+    banner = h("div", { className: "success" }, `Verified ${fmtDate(settings.verified_at)}. Turn on "Send notifications" to start delivering email.`);
+  }
+
+  const field = (label, key, opts = {}) => Field({
+    label,
+    children: h("input", {
+      className: "input", type: opts.type || "text",
+      value: form[key] === null ? "" : form[key],
+      placeholder: opts.placeholder || "",
+      onChange: (e) => set(key, opts.type === "number" ? Number(e.target.value) : e.target.value),
+    }),
+  });
+
+  return h("div", null,
+    h(PageHeader, {
+      title: "Email Notifications",
+      subtitle: "Connect an SMTP server so ticket activity reaches customers and product SPOCs.",
+      actions: h("div", { className: "page-actions" },
+        h("button", { className: "btn btn-outline", disabled: testing, onClick: sendTest }, testing ? "Sending..." : "Send Test Email"),
+        h("button", { className: "btn btn-primary", disabled: saving, onClick: () => save() }, saving ? "Saving..." : "Save Changes")
+      ),
+    }),
+
+    error && h("div", { className: "error" }, error),
+    notice && h("div", { className: "success" }, notice),
+    settings.secret_key_weak && h("div", { className: "warn" }, "SECRET_KEY is still the shipped default, so the stored SMTP password is not meaningfully protected at rest. Set a strong SECRET_KEY before going live."),
+    banner,
+
+    h("div", { className: "stats-grid" },
+      h(StatCard, { label: "Sent", value: stats.sent ?? 0, tone: "success" }),
+      h(StatCard, { label: "Queued", value: stats.queued ?? 0, tone: "primary" }),
+      h(StatCard, { label: "Retrying", value: stats.retrying ?? 0, tone: "warning" }),
+      h(StatCard, { label: "Failed", value: stats.failed ?? 0, tone: "danger" })
+    ),
+
+    h("section", { className: "panel" },
+      h("div", { className: "panel-header" }, h("h2", { className: "panel-title" }, "SMTP Server")),
+      h("div", { className: "panel-body" },
+        h("div", { className: "form-grid" },
+          field("Host", "host", { placeholder: "smtp.yourbank.co.in" }),
+          field("Port", "port", { type: "number" }),
+          Field({ label: "Security", children: h("select", { className: "select", value: form.security, onChange: (e) => set("security", e.target.value) },
+            h("option", { value: "starttls" }, "STARTTLS (recommended)"),
+            h("option", { value: "ssl" }, "SSL / TLS"),
+            h("option", { value: "none" }, "None (test servers only)")
+          ) }),
+          Field({ label: "Certificate", children: h("select", { className: "select", value: form.verify_tls ? "verify" : "skip", onChange: (e) => set("verify_tls", e.target.value === "verify") },
+            h("option", { value: "verify" }, "Verify TLS certificate (recommended)"),
+            h("option", { value: "skip" }, "Do not verify (private CA)")
+          ) }),
+          field("Username", "username"),
+          Field({ label: "Password", children: h("div", { className: "composer-row" },
+            h("input", {
+              className: "input", type: "password",
+              value: form.password === null ? "" : form.password,
+              placeholder: settings.has_password ? "Unchanged" : "Not set",
+              onChange: (e) => set("password", e.target.value),
+            }),
+            settings.has_password && h("button", { className: "btn btn-outline btn-sm", type: "button", onClick: () => set("password", "") }, "Clear")
+          ) }),
+          field("From Name", "from_name"),
+          field("From Address", "from_email", { placeholder: "support@advantal.net" }),
+          field("Reply-To", "reply_to", { placeholder: "Optional" }),
+          field("Portal URL", "portal_url", { placeholder: "https://support.yourbank.co.in" }),
+          field("Timeout (seconds)", "timeout_seconds", { type: "number" }),
+          field("Retry Attempts", "max_attempts", { type: "number" })
+        ),
+        h("div", { className: "small muted" }, "The password is encrypted before it is stored and is never sent back to this screen.")
+      )
+    ),
+
+    h("section", { className: "panel" },
+      h("div", { className: "panel-header" }, h("h2", { className: "panel-title" }, "Notify On")),
+      h("div", { className: "panel-body" },
+        h("div", { className: "permission-item", style: { marginBottom: "12px" } },
+          h("input", {
+            type: "checkbox", checked: settings.enabled, disabled: !settings.verified,
+            onChange: (e) => setEnabled(e.target.checked),
+          }),
+          h("span", null, h("strong", null, "Send notifications"))
+        ),
+        !settings.verified && h("div", { className: "small muted", style: { marginBottom: "12px" } },
+          "Send a successful test email to unlock this switch."),
+        h("div", { className: "permission-grid" },
+          (settings.event_types || []).map((ev) => h("label", { key: ev.key, className: "permission-item" },
+            h("input", { type: "checkbox", checked: Boolean(form.events[ev.key]), onChange: () => toggleEvent(ev.key) }),
+            h("span", null, h("strong", null, ev.label), h("div", { className: "small muted" }, ev.description))
+          ))
+        ),
+        h("div", { className: "small muted", style: { marginTop: "10px" } },
+          "Every notification goes to all active users of the ticket's customer and to every SPOC on the product's escalation matrix. Files are named but never attached.")
+      )
+    ),
+
+    h(EnterpriseTable, {
+      title: "Delivery Log",
+      rows: log,
+      defaultPageSize: 20,
+      emptyText: "No email has been queued yet.",
+      searchPlaceholder: "Search recipients, tickets and subjects...",
+      columns: [
+        { header: "Queued", accessor: "created_at", exportValue: (r) => fmtDate(r.created_at), cell: (r) => fmtDate(r.created_at) },
+        { header: "Event", accessor: "event_label", cell: (r) => h(Badge, { value: r.event_label, tone: "type" }) },
+        { header: "Ticket", accessor: "ticket_id", cell: (r) => h("span", { className: "mono small" }, r.ticket_id || "-") },
+        { header: "Recipient", accessor: "to_email", cell: (r) => h("div", null,
+          h("div", { style: { fontWeight: 700 } }, r.to_name || r.to_email),
+          h("div", { className: "small muted" }, r.to_email)) },
+        { header: "Audience", accessor: "audience", cell: (r) => h(Badge, { value: r.audience }) },
+        { header: "Subject", accessor: "subject", cell: (r) => h("span", { title: r.subject }, (r.subject || "").slice(0, 60) + ((r.subject || "").length > 60 ? "..." : "")) },
+        { header: "Status", accessor: "status", cell: (r) => h(Badge, { value: r.status }) },
+        { header: "Tries", accessor: "attempts", cell: (r) => h("span", { className: "mono" }, r.attempts) },
+        { header: "Error", accessor: "last_error", cell: (r) => r.last_error
+          ? h("span", { className: "small", title: r.last_error }, r.last_error.slice(0, 40) + (r.last_error.length > 40 ? "..." : ""))
+          : h("span", { className: "small muted" }, "-") },
+        { header: "Actions", id: "actions", export: false, stopRowClick: true, cell: (r) => (r.raw_status === "failed" || r.raw_status === "cancelled")
+          ? h("button", { className: "btn btn-outline btn-sm", onClick: () => retry(r) }, "Retry")
+          : null },
+      ],
+      filters: [
+        { key: "status", label: "All Statuses", value: (r) => r.status, options: uniqueOptions(log, (r) => r.status) },
+        { key: "event_label", label: "All Events", value: (r) => r.event_label, options: uniqueOptions(log, (r) => r.event_label) },
+        { key: "audience", label: "All Audiences", value: (r) => r.audience, options: uniqueOptions(log, (r) => r.audience) },
+      ],
+    }),
+
+    h("section", { className: "panel" },
+      h("div", { className: "panel-header" }, h("h2", { className: "panel-title" }, "Send a Test Email")),
+      h("div", { className: "panel-body" },
+        h("div", { className: "composer-row" },
+          h("input", { className: "input", value: testTo, placeholder: "you@example.com", onChange: (e) => setTestTo(e.target.value) }),
+          h("button", { className: "btn btn-outline", disabled: testing, onClick: sendTest }, testing ? "Sending..." : "Send Test")
+        ),
+        h("div", { className: "small muted", style: { marginTop: "8px" } },
+          "A successful test verifies the configuration and unlocks the notifications switch. Changing any connection setting afterwards requires re-verification.")
+      )
+    )
+  );
+}
+
 export function App() {
   const { user } = useAuth();
   const [page, setPage] = useState("dashboard");
@@ -1213,6 +1453,7 @@ export function App() {
     page === "products" && h(ProductsPage),
     page === "signoffs" && h(SignoffsPage),
     page === "users" && h(UsersPage),
-    page === "roles" && h(RolesPage)
+    page === "roles" && h(RolesPage),
+    page === "notifications" && h(NotificationsPage)
   );
 }

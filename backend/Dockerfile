@@ -12,7 +12,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy all source files
-COPY main.py database.py models.py seed.py migrate.py ./
+COPY main.py database.py models.py seed.py migrate.py \
+     mailer.py email_templates.py notifications.py email_worker.py ./
 
 # Uploads directory
 RUN mkdir -p /app/uploads

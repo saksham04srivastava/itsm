@@ -60,6 +60,24 @@ services:
     networks:
       - fieldops-net
 
+  # ── Mailpit: local SMTP catcher for testing notifications ────────────────────
+  # Dev only. Behind a profile so it never starts in production:
+  #   docker compose --profile mail up -d
+  # Then point the portal's SMTP settings at host "mailpit", port 1025,
+  # security "none", and read the captured mail at http://localhost:8025
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: fieldops-mailpit
+    restart: unless-stopped
+    profiles: ["mail"]
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY:    1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+    ports:
+      - "8025:8025"
+    networks:
+      - fieldops-net
+
 volumes:
   db_data:
     name: fieldops-db-data        # ← all your data persists here
